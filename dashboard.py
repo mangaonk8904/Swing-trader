@@ -310,6 +310,47 @@ with tab_filings:
         if not fintel.enabled:
             st.warning("Fintel API key not configured. Add FINTEL_API_KEY to your .env file or Streamlit secrets.")
         else:
+            # --- 13F Institutional Ownership (full width) ---
+            st.subheader(f"13F Institutional Ownership — {filing_ticker}")
+            inst_ownership = []
+            try:
+                with st.spinner("Fetching 13F institutional data..."):
+                    inst_ownership = fintel.get_institutional_ownership(filing_ticker)
+            except Exception as e:
+                st.error(f"Error fetching institutional ownership: {e}")
+
+            if inst_ownership:
+                rows = []
+                for h in inst_ownership[:100]:
+                    row = {}
+                    row["Institution"] = h.get("ownerName") or h.get("name") or h.get("institution") or h.get("entityName") or ""
+                    row["Filing Date"] = h.get("filingDate") or h.get("date") or h.get("reportDate") or ""
+                    row["Shares"] = h.get("sharesHeld") or h.get("shares") or h.get("position") or h.get("sharesNumber") or ""
+                    row["Value ($)"] = h.get("value") or h.get("marketValue") or h.get("notionalValue") or ""
+                    row["Change"] = h.get("change") or h.get("sharesChange") or h.get("changeInShares") or ""
+                    row["% Change"] = h.get("changePct") or h.get("sharesChangePct") or h.get("percentChange") or ""
+                    row["% Portfolio"] = h.get("portfolioPct") or h.get("percentOfPortfolio") or h.get("portfolioPercent") or ""
+                    row["URL"] = h.get("filingUrl") or h.get("url") or h.get("link") or ""
+                    rows.append(row)
+
+                df_inst = pd.DataFrame(rows)
+                # Drop empty columns
+                df_inst = df_inst.loc[:, df_inst.ne("").any()]
+                if "URL" in df_inst.columns and df_inst["URL"].any():
+                    st.dataframe(
+                        df_inst,
+                        column_config={"URL": st.column_config.LinkColumn("Link", display_text="View")},
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                else:
+                    st.dataframe(df_inst.drop(columns=["URL"], errors="ignore"), use_container_width=True, hide_index=True)
+            else:
+                st.info(f"No 13F institutional ownership data found for {filing_ticker}")
+
+            st.markdown("---")
+
+            # --- SEC Filings & Insider Trades side by side ---
             col_sec, col_insider = st.columns(2)
 
             with col_sec:

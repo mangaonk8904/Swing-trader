@@ -119,6 +119,18 @@ class FintelClient:
                 return data[key]
         return [data] if data else []
 
+    def get_institutional_ownership(self, ticker: str) -> list[dict]:
+        """Fetch 13F institutional ownership filings (who owns what)."""
+        data = self._fetch_with_country("so", ticker)
+        if data is None:
+            return []
+        if isinstance(data, list):
+            return data
+        for key in ("owners", "holdings", "data", "results", "rows"):
+            if key in data and isinstance(data[key], list):
+                return data[key]
+        return [data] if data else []
+
     def get_institutional_holdings(self, ticker: str) -> dict | None:
         """Fetch institutional ownership summary (13F data)."""
         return self._fetch("if", ticker)
