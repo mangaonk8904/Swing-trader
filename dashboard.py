@@ -69,10 +69,11 @@ file_tickers = sorted(set(list(fund_map.keys()) + list(inst_map.keys())))
 manual_list = [t.strip().upper() for t in manual_tickers.split(",") if t.strip()] if manual_tickers else []
 all_tickers = sorted(set(file_tickers + manual_list))
 
-if not all_tickers:
-    st.info("Upload an Excel file or enter tickers in the sidebar to get started.")
-    st.stop()
+# --- Tabs ---
+tab_analysis, tab_filings = st.tabs(["Analysis", "Fintel Filings"])
 
+
+# ===================== HELPER FUNCTIONS =====================
 
 def _merge_institutional(excel: InstitutionalData | None, fintel_data: InstitutionalData) -> InstitutionalData:
     if excel is None:
@@ -87,7 +88,6 @@ def _merge_institutional(excel: InstitutionalData | None, fintel_data: Instituti
     )
 
 
-# --- Score all tickers ---
 @st.cache_data(ttl=300, show_spinner="Fetching market data...")
 def fetch_and_score(tickers: tuple, fund_data: dict, inst_data: dict, fintel_enabled: bool):
     scores = []
@@ -122,36 +122,6 @@ def fetch_and_score(tickers: tuple, fund_data: dict, inst_data: dict, fintel_ena
 
     return scores, tech_data, price_data
 
-# Convert to hashable types for caching
-fund_dict = {k: v.model_dump() for k, v in fund_map.items()}
-inst_dict = {k: v.model_dump() for k, v in inst_map.items()}
-
-# Reconstruct for scoring (cache needs hashable inputs)
-fund_for_score = {k: FundamentalData(**v) for k, v in fund_dict.items()}
-inst_for_score = {k: InstitutionalData(**v) for k, v in inst_dict.items()}
-
-scores, tech_data, price_data = fetch_and_score(tuple(all_tickers), fund_for_score, inst_for_score, fintel.enabled)
-
-# --- Scores Table ---
-st.header("Swing Trade Scores")
-
-score_rows = []
-for s in sorted(scores, key=lambda x: x.composite_score, reverse=True):
-    score_rows.append({
-        "Ticker": s.ticker,
-        "Signal": s.signal.value.upper(),
-        "Composite": s.composite_score,
-        "Technical": s.technical_score,
-        "Fundamental": s.fundamental_score,
-        "Institutional": s.institutional_score,
-        "Entry": s.entry_price,
-        "Stop Loss": s.stop_loss,
-        "Target": s.target_price,
-        "Notes": s.notes,
-    })
-
-score_df = pd.DataFrame(score_rows)
-
 
 def color_signal(val):
     colors = {
@@ -174,119 +144,229 @@ def color_composite(val):
         return "background-color: #e74c3c; color: white"
 
 
-styled_df = score_df.style.map(color_signal, subset=["Signal"]).map(color_composite, subset=["Composite"]).format({
-    "Composite": "{:.1f}",
-    "Technical": "{:.1f}",
-    "Fundamental": "{:.1f}",
-    "Institutional": "{:.1f}",
-    "Entry": "${:,.2f}",
-    "Stop Loss": "${:,.2f}",
-    "Target": "${:,.2f}",
-}, na_rep="N/A")
-
-st.dataframe(styled_df, use_container_width=True, hide_index=True)
-
-# --- Excel Download ---
 def to_excel_bytes(df: pd.DataFrame) -> bytes:
     output = BytesIO()
     df.to_excel(output, index=False, sheet_name="Scores")
     return output.getvalue()
 
-st.download_button(
-    label="Download Results (Excel)",
-    data=to_excel_bytes(score_df),
-    file_name=f"swing_trade_scores_{date.today()}.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
 
-# --- Charts for individual tickers ---
-st.header("Technical Charts")
+# ===================== ANALYSIS TAB =====================
+with tab_analysis:
+    if not all_tickers:
+        st.info("Upload an Excel file or enter tickers in the sidebar to get started.")
+    else:
+        # Convert to hashable types for caching
+        fund_dict = {k: v.model_dump() for k, v in fund_map.items()}
+        inst_dict = {k: v.model_dump() for k, v in inst_map.items()}
 
-selected_ticker = st.selectbox("Select ticker for chart", all_tickers)
+        # Reconstruct for scoring (cache needs hashable inputs)
+        fund_for_score = {k: FundamentalData(**v) for k, v in fund_dict.items()}
+        inst_for_score = {k: InstitutionalData(**v) for k, v in inst_dict.items()}
 
-if selected_ticker in price_data:
-    df = price_data[selected_ticker]
-    close = df["Close"]
+        scores, tech_data, price_data = fetch_and_score(tuple(all_tickers), fund_for_score, inst_for_score, fintel.enabled)
 
-    # Compute indicators for charting
-    sma_20 = ta.sma(close, length=20)
-    sma_50 = ta.sma(close, length=50)
-    rsi = ta.rsi(close, length=14)
-    macd_df = ta.macd(close, fast=12, slow=26, signal=9)
+        # --- Scores Table ---
+        st.header("Swing Trade Scores")
 
-    # Create subplots: candlestick, RSI, MACD
-    fig = make_subplots(
-        rows=3, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.6, 0.2, 0.2],
-        subplot_titles=[f"{selected_ticker} Price", "RSI (14)", "MACD"],
-        specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]],
-    )
+        score_rows = []
+        for s in sorted(scores, key=lambda x: x.composite_score, reverse=True):
+            score_rows.append({
+                "Ticker": s.ticker,
+                "Signal": s.signal.value.upper(),
+                "Composite": s.composite_score,
+                "Technical": s.technical_score,
+                "Fundamental": s.fundamental_score,
+                "Institutional": s.institutional_score,
+                "Entry": s.entry_price,
+                "Stop Loss": s.stop_loss,
+                "Target": s.target_price,
+                "Notes": s.notes,
+            })
 
-    # Candlestick
-    fig.add_trace(go.Candlestick(
-        x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
-        name="Price",
-    ), row=1, col=1, secondary_y=False)
+        score_df = pd.DataFrame(score_rows)
 
-    # SMA overlays
-    if sma_20 is not None:
-        fig.add_trace(go.Scatter(x=df.index, y=sma_20, name="SMA 20", line=dict(color="orange", width=1)), row=1, col=1, secondary_y=False)
-    if sma_50 is not None:
-        fig.add_trace(go.Scatter(x=df.index, y=sma_50, name="SMA 50", line=dict(color="blue", width=1)), row=1, col=1, secondary_y=False)
+        styled_df = score_df.style.map(color_signal, subset=["Signal"]).map(color_composite, subset=["Composite"]).format({
+            "Composite": "{:.1f}",
+            "Technical": "{:.1f}",
+            "Fundamental": "{:.1f}",
+            "Institutional": "{:.1f}",
+            "Entry": "${:,.2f}",
+            "Stop Loss": "${:,.2f}",
+            "Target": "${:,.2f}",
+        }, na_rep="N/A")
 
-    # Volume on secondary y-axis so it doesn't overwhelm candlesticks
-    colors = ["green" if c >= o else "red" for c, o in zip(df["Close"], df["Open"])]
-    fig.add_trace(go.Bar(x=df.index, y=df["Volume"], name="Volume", marker_color=colors, opacity=0.3), row=1, col=1, secondary_y=True)
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
-    # RSI
-    if rsi is not None:
-        fig.add_trace(go.Scatter(x=df.index, y=rsi, name="RSI", line=dict(color="purple", width=1.5)), row=2, col=1)
-        fig.add_hline(y=70, line_dash="dash", line_color="red", opacity=0.5, row=2, col=1)
-        fig.add_hline(y=30, line_dash="dash", line_color="green", opacity=0.5, row=2, col=1)
+        # --- Excel Download ---
+        st.download_button(
+            label="Download Results (Excel)",
+            data=to_excel_bytes(score_df),
+            file_name=f"swing_trade_scores_{date.today()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
-    # MACD
-    if macd_df is not None:
-        macd_cols = macd_df.columns
-        fig.add_trace(go.Scatter(x=df.index, y=macd_df[macd_cols[0]], name="MACD", line=dict(color="blue", width=1.5)), row=3, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=macd_df[macd_cols[2]], name="Signal", line=dict(color="red", width=1.5)), row=3, col=1)
-        histogram = macd_df[macd_cols[1]]
-        hist_colors = ["green" if v >= 0 else "red" for v in histogram]
-        fig.add_trace(go.Bar(x=df.index, y=histogram, name="Histogram", marker_color=hist_colors, opacity=0.5), row=3, col=1)
+        # --- Charts for individual tickers ---
+        st.header("Technical Charts")
 
-    fig.update_layout(
-        height=800,
-        xaxis_rangeslider_visible=False,
-        showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    )
-    fig.update_yaxes(title_text="Price", row=1, col=1, secondary_y=False)
-    fig.update_yaxes(title_text="Volume", row=1, col=1, secondary_y=True, showgrid=False)
-    fig.update_yaxes(title_text="RSI", row=2, col=1)
-    fig.update_yaxes(title_text="MACD", row=3, col=1)
+        selected_ticker = st.selectbox("Select ticker for chart", all_tickers)
 
-    st.plotly_chart(fig, use_container_width=True)
+        if selected_ticker in price_data:
+            df = price_data[selected_ticker]
+            close = df["Close"]
 
-    # Show fundamentals info
-    if selected_ticker in tech_data:
-        snap = tech_data[selected_ticker]
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Price", f"${snap.price:.2f}")
-        col2.metric("RSI (14)", f"{snap.rsi_14:.1f}" if snap.rsi_14 else "N/A")
-        col3.metric("MACD", snap.macd_signal or "N/A")
-        col4.metric("ATR (14)", f"${snap.atr_14:.2f}" if snap.atr_14 else "N/A")
+            # Compute indicators for charting
+            sma_20 = ta.sma(close, length=20)
+            sma_50 = ta.sma(close, length=50)
+            rsi = ta.rsi(close, length=14)
+            macd_df = ta.macd(close, fast=12, slow=26, signal=9)
 
-    # Show score for selected ticker
-    selected_score = next((s for s in scores if s.ticker == selected_ticker), None)
-    if selected_score:
-        st.markdown("---")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Composite Score", f"{selected_score.composite_score:.1f}")
-        col2.metric("Signal", selected_score.signal.value.upper())
-        if selected_score.entry_price and selected_score.stop_loss and selected_score.target_price:
-            col3.metric("Entry → Target", f"${selected_score.entry_price:.2f} → ${selected_score.target_price:.2f}")
-            col4.metric("Stop Loss", f"${selected_score.stop_loss:.2f}")
+            # Create subplots: candlestick, RSI, MACD
+            fig = make_subplots(
+                rows=3, cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.03,
+                row_heights=[0.6, 0.2, 0.2],
+                subplot_titles=[f"{selected_ticker} Price", "RSI (14)", "MACD"],
+                specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]],
+            )
 
-else:
-    st.warning(f"No price data available for {selected_ticker}")
+            # Candlestick
+            fig.add_trace(go.Candlestick(
+                x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+                name="Price",
+            ), row=1, col=1, secondary_y=False)
+
+            # SMA overlays
+            if sma_20 is not None:
+                fig.add_trace(go.Scatter(x=df.index, y=sma_20, name="SMA 20", line=dict(color="orange", width=1)), row=1, col=1, secondary_y=False)
+            if sma_50 is not None:
+                fig.add_trace(go.Scatter(x=df.index, y=sma_50, name="SMA 50", line=dict(color="blue", width=1)), row=1, col=1, secondary_y=False)
+
+            # Volume on secondary y-axis so it doesn't overwhelm candlesticks
+            colors = ["green" if c >= o else "red" for c, o in zip(df["Close"], df["Open"])]
+            fig.add_trace(go.Bar(x=df.index, y=df["Volume"], name="Volume", marker_color=colors, opacity=0.3), row=1, col=1, secondary_y=True)
+
+            # RSI
+            if rsi is not None:
+                fig.add_trace(go.Scatter(x=df.index, y=rsi, name="RSI", line=dict(color="purple", width=1.5)), row=2, col=1)
+                fig.add_hline(y=70, line_dash="dash", line_color="red", opacity=0.5, row=2, col=1)
+                fig.add_hline(y=30, line_dash="dash", line_color="green", opacity=0.5, row=2, col=1)
+
+            # MACD
+            if macd_df is not None:
+                macd_cols = macd_df.columns
+                fig.add_trace(go.Scatter(x=df.index, y=macd_df[macd_cols[0]], name="MACD", line=dict(color="blue", width=1.5)), row=3, col=1)
+                fig.add_trace(go.Scatter(x=df.index, y=macd_df[macd_cols[2]], name="Signal", line=dict(color="red", width=1.5)), row=3, col=1)
+                histogram = macd_df[macd_cols[1]]
+                hist_colors = ["green" if v >= 0 else "red" for v in histogram]
+                fig.add_trace(go.Bar(x=df.index, y=histogram, name="Histogram", marker_color=hist_colors, opacity=0.5), row=3, col=1)
+
+            fig.update_layout(
+                height=800,
+                xaxis_rangeslider_visible=False,
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            )
+            fig.update_yaxes(title_text="Price", row=1, col=1, secondary_y=False)
+            fig.update_yaxes(title_text="Volume", row=1, col=1, secondary_y=True, showgrid=False)
+            fig.update_yaxes(title_text="RSI", row=2, col=1)
+            fig.update_yaxes(title_text="MACD", row=3, col=1)
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Show fundamentals info
+            if selected_ticker in tech_data:
+                snap = tech_data[selected_ticker]
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Price", f"${snap.price:.2f}")
+                col2.metric("RSI (14)", f"{snap.rsi_14:.1f}" if snap.rsi_14 else "N/A")
+                col3.metric("MACD", snap.macd_signal or "N/A")
+                col4.metric("ATR (14)", f"${snap.atr_14:.2f}" if snap.atr_14 else "N/A")
+
+            # Show score for selected ticker
+            selected_score = next((s for s in scores if s.ticker == selected_ticker), None)
+            if selected_score:
+                st.markdown("---")
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Composite Score", f"{selected_score.composite_score:.1f}")
+                col2.metric("Signal", selected_score.signal.value.upper())
+                if selected_score.entry_price and selected_score.stop_loss and selected_score.target_price:
+                    col3.metric("Entry → Target", f"${selected_score.entry_price:.2f} → ${selected_score.target_price:.2f}")
+                    col4.metric("Stop Loss", f"${selected_score.stop_loss:.2f}")
+
+        else:
+            st.warning(f"No price data available for {selected_ticker}")
+
+
+# ===================== FINTEL FILINGS TAB =====================
+with tab_filings:
+    st.header("Fintel Filings Lookup")
+
+    filing_ticker = st.text_input("Enter ticker symbol", placeholder="AAPL", key="filing_ticker")
+
+    if filing_ticker:
+        filing_ticker = filing_ticker.strip().upper()
+
+        if not fintel.enabled:
+            st.warning("Fintel API key not configured. Add FINTEL_API_KEY to your .env file or Streamlit secrets.")
+        else:
+            col_sec, col_insider = st.columns(2)
+
+            with col_sec:
+                st.subheader(f"SEC Filings — {filing_ticker}")
+                with st.spinner("Fetching SEC filings..."):
+                    sec_filings = fintel.get_sec_filings(filing_ticker)
+
+                if sec_filings:
+                    rows = []
+                    for f in sec_filings[:50]:
+                        row = {}
+                        row["Date"] = f.get("filingDate") or f.get("date") or f.get("filed") or ""
+                        row["Type"] = f.get("formType") or f.get("type") or f.get("form") or ""
+                        row["Description"] = f.get("description") or f.get("title") or f.get("name") or ""
+                        row["URL"] = f.get("filingUrl") or f.get("url") or f.get("link") or ""
+                        rows.append(row)
+
+                    df_filings = pd.DataFrame(rows)
+                    if df_filings["URL"].any():
+                        st.dataframe(
+                            df_filings,
+                            column_config={"URL": st.column_config.LinkColumn("Link", display_text="View")},
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.dataframe(df_filings.drop(columns=["URL"], errors="ignore"), use_container_width=True, hide_index=True)
+                else:
+                    st.info(f"No SEC filings found for {filing_ticker}")
+
+            with col_insider:
+                st.subheader(f"Insider Trades — {filing_ticker}")
+                with st.spinner("Fetching insider trades..."):
+                    insider_trades = fintel.get_insider_trades(filing_ticker)
+
+                if insider_trades:
+                    rows = []
+                    for t in insider_trades[:50]:
+                        row = {}
+                        row["Date"] = t.get("filingDate") or t.get("date") or t.get("transactionDate") or ""
+                        row["Insider"] = t.get("ownerName") or t.get("name") or t.get("insider") or ""
+                        row["Title"] = t.get("ownerTitle") or t.get("title") or t.get("relationship") or ""
+                        row["Type"] = t.get("transactionType") or t.get("type") or t.get("acquiredDisposed") or ""
+                        row["Shares"] = t.get("sharesTraded") or t.get("shares") or t.get("amount") or ""
+                        row["Price"] = t.get("pricePerShare") or t.get("price") or ""
+                        row["URL"] = t.get("filingUrl") or t.get("url") or t.get("link") or ""
+                        rows.append(row)
+
+                    df_insider = pd.DataFrame(rows)
+                    if df_insider["URL"].any():
+                        st.dataframe(
+                            df_insider,
+                            column_config={"URL": st.column_config.LinkColumn("Link", display_text="View")},
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.dataframe(df_insider.drop(columns=["URL"], errors="ignore"), use_container_width=True, hide_index=True)
+                else:
+                    st.info(f"No insider trades found for {filing_ticker}")

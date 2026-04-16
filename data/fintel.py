@@ -64,6 +64,61 @@ class FintelClient:
             print(f"[Fintel] Request error for {ticker}: {e}")
             return None
 
+    def _fetch_with_country(self, endpoint: str, ticker: str, country: str = "us") -> dict | None:
+        """Fetch from endpoints that require a country segment (e.g. sf/us/aapl)."""
+        if not self.enabled:
+            return None
+
+        cache_key = f"{endpoint}/{country}"
+        cached = self._get_cached(ticker, cache_key)
+        if cached is not None:
+            return cached
+
+        url = f"{BASE_URL}/{endpoint}/{country}/{ticker.lower()}"
+        try:
+            resp = self.client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+            self._set_cache(ticker, cache_key, data)
+            return data
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 403:
+                print(f"[Fintel] Access denied for {endpoint}/{ticker} — check API key/plan")
+            elif e.response.status_code == 429:
+                print(f"[Fintel] Rate limited — try again later")
+            else:
+                print(f"[Fintel] HTTP {e.response.status_code} for {endpoint}/{ticker}")
+            return None
+        except httpx.RequestError as e:
+            print(f"[Fintel] Request error for {endpoint}/{ticker}: {e}")
+            return None
+
+    def get_sec_filings(self, ticker: str) -> list[dict]:
+        """Fetch recent SEC filings (10-K, 10-Q, 8-K, etc.)."""
+        data = self._fetch_with_country("sf", ticker)
+        if data is None:
+            return []
+        # Response may be a list or have a key containing the list
+        if isinstance(data, list):
+            return data
+        # Try common wrapper keys
+        for key in ("filings", "data", "results", "rows"):
+            if key in data and isinstance(data[key], list):
+                return data[key]
+        return [data] if data else []
+
+    def get_insider_trades(self, ticker: str) -> list[dict]:
+        """Fetch recent insider trades (Form 3, 4, 5)."""
+        data = self._fetch_with_country("n", ticker)
+        if data is None:
+            return []
+        if isinstance(data, list):
+            return data
+        for key in ("trades", "data", "results", "rows"):
+            if key in data and isinstance(data[key], list):
+                return data[key]
+        return [data] if data else []
+
     def get_institutional_holdings(self, ticker: str) -> dict | None:
         """Fetch institutional ownership summary (13F data)."""
         return self._fetch("if", ticker)
