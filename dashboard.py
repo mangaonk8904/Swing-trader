@@ -12,7 +12,7 @@ from data.fintel import FintelClient
 from data.seekingalpha import SeekingAlphaClient
 from analysis.technicals import compute_technicals
 from analysis.scoring import score_stock
-from models import FundamentalData, InstitutionalData, SeekingAlphaData, StockScore
+from schemas import FundamentalData, InstitutionalData, SeekingAlphaData, StockScore
 
 st.set_page_config(page_title="Swing Trader", page_icon="📊", layout="wide")
 st.title("Swing Trader Dashboard")

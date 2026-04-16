@@ -1,6 +1,6 @@
 import pandas as pd
 from pathlib import Path
-from models import FundamentalData, InstitutionalData, StockScore
+from schemas import FundamentalData, InstitutionalData, StockScore
 
 
 def read_revenue_data(file_path: str | Path) -> list[FundamentalData]:

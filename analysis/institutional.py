@@ -1,4 +1,4 @@
-from models import InstitutionalData
+from schemas import InstitutionalData
 
 
 def score_institutional(data: InstitutionalData) -> float:

@@ -1,4 +1,4 @@
-from models import SeekingAlphaData
+from schemas import SeekingAlphaData
 
 
 def score_seeking_alpha(sa: SeekingAlphaData) -> float:

@@ -1,5 +1,5 @@
 from datetime import date
-from models import (
+from schemas import (
     TechnicalSnapshot,
     FundamentalData,
     InstitutionalData,

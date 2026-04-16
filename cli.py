@@ -14,7 +14,7 @@ from data.fintel import FintelClient
 from analysis.technicals import compute_technicals
 from analysis.scoring import score_stock
 
-from models import InstitutionalData
+from schemas import InstitutionalData
 
 app = typer.Typer(help="Swing Trader Analysis Tool")
 console = Console()

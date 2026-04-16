@@ -2,7 +2,7 @@ import httpx
 import json
 from pathlib import Path
 from datetime import date
-from models import InstitutionalData
+from schemas import InstitutionalData
 from config import settings
 
 CACHE_DIR = Path(".cache/fintel")

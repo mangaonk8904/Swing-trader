@@ -1,4 +1,4 @@
-from models import FundamentalData
+from schemas import FundamentalData
 
 
 def score_fundamentals(data: FundamentalData) -> float:
