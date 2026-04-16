@@ -4,10 +4,26 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _get_streamlit_secret(key: str) -> str:
+    """Try to read a key from Streamlit secrets (available on Streamlit Cloud)."""
+    try:
+        import streamlit as st
+        return st.secrets.get(key, "")
+    except Exception:
+        return ""
+
+
 class Settings(BaseSettings):
     # API Keys
     fintel_api_key: str = ""
     seeking_alpha_rapidapi_key: str = ""
+
+    def model_post_init(self, __context) -> None:
+        # Fall back to Streamlit secrets if env vars are empty
+        if not self.fintel_api_key:
+            self.fintel_api_key = _get_streamlit_secret("FINTEL_API_KEY")
+        if not self.seeking_alpha_rapidapi_key:
+            self.seeking_alpha_rapidapi_key = _get_streamlit_secret("SEEKING_ALPHA_RAPIDAPI_KEY")
 
     # Scoring Weights (must sum to 1.0)
     technical_weight: float = 0.35

@@ -314,8 +314,12 @@ with tab_filings:
 
             with col_sec:
                 st.subheader(f"SEC Filings — {filing_ticker}")
-                with st.spinner("Fetching SEC filings..."):
-                    sec_filings = fintel.get_sec_filings(filing_ticker)
+                sec_filings = []
+                try:
+                    with st.spinner("Fetching SEC filings..."):
+                        sec_filings = fintel.get_sec_filings(filing_ticker)
+                except Exception as e:
+                    st.error(f"Error fetching SEC filings: {e}")
 
                 if sec_filings:
                     rows = []
@@ -342,8 +346,12 @@ with tab_filings:
 
             with col_insider:
                 st.subheader(f"Insider Trades — {filing_ticker}")
-                with st.spinner("Fetching insider trades..."):
-                    insider_trades = fintel.get_insider_trades(filing_ticker)
+                insider_trades = []
+                try:
+                    with st.spinner("Fetching insider trades..."):
+                        insider_trades = fintel.get_insider_trades(filing_ticker)
+                except Exception as e:
+                    st.error(f"Error fetching insider trades: {e}")
 
                 if insider_trades:
                     rows = []
