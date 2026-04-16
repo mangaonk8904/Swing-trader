@@ -323,14 +323,17 @@ with tab_filings:
                 rows = []
                 for h in inst_ownership[:100]:
                     row = {}
-                    row["Institution"] = h.get("ownerName") or h.get("name") or h.get("institution") or h.get("entityName") or ""
-                    row["Filing Date"] = h.get("filingDate") or h.get("date") or h.get("reportDate") or ""
-                    row["Shares"] = h.get("sharesHeld") or h.get("shares") or h.get("position") or h.get("sharesNumber") or ""
-                    row["Value ($)"] = h.get("value") or h.get("marketValue") or h.get("notionalValue") or ""
-                    row["Change"] = h.get("change") or h.get("sharesChange") or h.get("changeInShares") or ""
-                    row["% Change"] = h.get("changePct") or h.get("sharesChangePct") or h.get("percentChange") or ""
-                    row["% Portfolio"] = h.get("portfolioPct") or h.get("percentOfPortfolio") or h.get("portfolioPercent") or ""
-                    row["URL"] = h.get("filingUrl") or h.get("url") or h.get("link") or ""
+                    row["Institution"] = h.get("name") or ""
+                    row["Form"] = h.get("formType") or ""
+                    row["Filing Date"] = h.get("fileDate") or ""
+                    row["Effective Date"] = h.get("effectiveDate") or ""
+                    row["Shares"] = h.get("shares") or ""
+                    row["Shares Change"] = h.get("sharesChange") or ""
+                    row["Shares % Change"] = h.get("sharesPercentChange") or ""
+                    row["Ownership %"] = h.get("ownershipPercent") or ""
+                    row["Value ($)"] = h.get("value") or ""
+                    row["Value Change ($)"] = h.get("valueChange") or ""
+                    row["URL"] = h.get("url") or ""
                     rows.append(row)
 
                 df_inst = pd.DataFrame(rows)
