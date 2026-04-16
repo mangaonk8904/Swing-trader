@@ -3,11 +3,13 @@ from models import (
     TechnicalSnapshot,
     FundamentalData,
     InstitutionalData,
+    SeekingAlphaData,
     StockScore,
     Signal,
 )
 from analysis.fundamentals import score_fundamentals
 from analysis.institutional import score_institutional
+from analysis.sa_scoring import score_seeking_alpha
 from config import settings
 
 
@@ -56,13 +58,14 @@ def score_stock(
     tech: TechnicalSnapshot | None = None,
     fund: FundamentalData | None = None,
     inst: InstitutionalData | None = None,
+    sa: SeekingAlphaData | None = None,
 ) -> StockScore:
     """Combine all available data into a weighted composite score.
 
     Weights re-normalize when a component is missing so the score
     still uses the full 0-100 range.
     """
-    ticker = (tech and tech.ticker) or (fund and fund.ticker) or (inst and inst.ticker) or "UNKNOWN"
+    ticker = (tech and tech.ticker) or (fund and fund.ticker) or (inst and inst.ticker) or (sa and sa.ticker) or "UNKNOWN"
     today = (tech and tech.date) or date.today()
 
     # Compute sub-scores for available data
@@ -71,6 +74,7 @@ def score_stock(
     tech_score = 0.0
     fund_score = 0.0
     inst_score = 0.0
+    sa_score = 0.0
 
     if tech is not None:
         tech_score = score_technical(tech)
@@ -83,6 +87,10 @@ def score_stock(
     if inst is not None:
         inst_score = score_institutional(inst)
         components.append((inst_score, settings.institutional_weight))
+
+    if sa is not None:
+        sa_score = score_seeking_alpha(sa)
+        components.append((sa_score, settings.sa_weight))
 
     # Weighted composite with re-normalization
     if components:
@@ -120,6 +128,10 @@ def score_stock(
         notes_parts.append(f"Strong rev growth {fund.revenue_growth_pct:+.1f}%")
     if inst and inst.net_institutional is not None and inst.net_institutional > 50:
         notes_parts.append(f"Heavy inst buying (net {inst.net_institutional})")
+    if sa and sa.mean_score >= 4.5:
+        notes_parts.append(f"SA Strong Buy ({sa.rating})")
+    elif sa and sa.momentum >= 10:
+        notes_parts.append(f"SA high momentum ({sa.momentum}/12)")
 
     return StockScore(
         ticker=ticker,
@@ -127,6 +139,7 @@ def score_stock(
         technical_score=round(tech_score, 1),
         fundamental_score=round(fund_score, 1),
         institutional_score=round(inst_score, 1),
+        sa_score=round(sa_score, 1),
         composite_score=round(composite, 1),
         signal=signal,
         entry_price=entry,

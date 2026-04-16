@@ -39,12 +39,25 @@ class InstitutionalData(BaseModel):
     short_interest_change: float | None = None
 
 
+class SeekingAlphaData(BaseModel):
+    ticker: str
+    value: int = 0           # 1-12 factor grade
+    growth: int = 0
+    momentum: int = 0
+    profitability: int = 0
+    eps_revisions: int = 0
+    analyst_count: int = 0
+    mean_score: float = 0.0  # 1-5 Wall Street consensus
+    rating: str = "N/A"
+
+
 class StockScore(BaseModel):
     ticker: str
     date: date
     technical_score: float = 0.0
     fundamental_score: float = 0.0
     institutional_score: float = 0.0
+    sa_score: float = 0.0
     composite_score: float = 0.0
     signal: Signal = Signal.PASS
     entry_price: float | None = None

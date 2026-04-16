@@ -9,9 +9,10 @@ from datetime import date, datetime, timedelta
 from data.yahoo import get_price_data, get_basic_fundamentals
 from data.excel_io import read_revenue_data, read_institutional_data, get_available_sheets
 from data.fintel import FintelClient
+from data.seekingalpha import SeekingAlphaClient
 from analysis.technicals import compute_technicals
 from analysis.scoring import score_stock
-from models import FundamentalData, InstitutionalData, StockScore
+from models import FundamentalData, InstitutionalData, SeekingAlphaData, StockScore
 
 st.set_page_config(page_title="Swing Trader", page_icon="📊", layout="wide")
 st.title("Swing Trader Dashboard")
@@ -53,6 +54,7 @@ if uploaded_file:
 
 # Fintel integration
 fintel = FintelClient()
+sa_client = SeekingAlphaClient()
 
 # Data source status in sidebar
 st.sidebar.markdown("---")
@@ -62,7 +64,10 @@ if fintel.enabled:
     st.sidebar.markdown(f"- Fintel.io: :green[Active]")
 else:
     st.sidebar.markdown(f"- Fintel.io: :gray[No API key]")
-st.sidebar.markdown(f"- Seeking Alpha: :gray[Phase 6]")
+if sa_client.enabled:
+    st.sidebar.markdown(f"- Seeking Alpha: :green[Active]")
+else:
+    st.sidebar.markdown(f"- Seeking Alpha: :gray[No API key]")
 
 # Combine tickers from file + manual input
 file_tickers = sorted(set(list(fund_map.keys()) + list(inst_map.keys())))
@@ -89,12 +94,22 @@ def _merge_institutional(excel: InstitutionalData | None, fintel_data: Instituti
 
 
 @st.cache_data(ttl=300, show_spinner="Fetching market data...")
-def fetch_and_score(tickers: tuple, fund_data: dict, inst_data: dict, fintel_enabled: bool):
+def fetch_and_score(tickers: tuple, fund_data: dict, inst_data: dict, fintel_enabled: bool, sa_enabled: bool):
     scores = []
     tech_data = {}
     price_data = {}
+    sa_data = {}
 
     fintel_client = FintelClient() if fintel_enabled else None
+
+    # Batch-fetch Seeking Alpha data for all tickers at once
+    sa_all = {}
+    if sa_enabled:
+        try:
+            sa_client = SeekingAlphaClient()
+            sa_all = sa_client.get_ticker_data(list(tickers))
+        except Exception:
+            pass
 
     for ticker in tickers:
         tech = None
@@ -113,14 +128,32 @@ def fetch_and_score(tickers: tuple, fund_data: dict, inst_data: dict, fintel_ena
             if fintel_inst:
                 inst = _merge_institutional(inst, fintel_inst)
 
+        # Build SeekingAlphaData if available
+        sa = None
+        sa_raw = sa_all.get(ticker)
+        if sa_raw:
+            sa = SeekingAlphaData(
+                ticker=ticker,
+                value=sa_raw.get("value", 0),
+                growth=sa_raw.get("growth", 0),
+                momentum=sa_raw.get("momentum", 0),
+                profitability=sa_raw.get("profitability", 0),
+                eps_revisions=sa_raw.get("eps_revisions", 0),
+                analyst_count=sa_raw.get("analyst_count", 0),
+                mean_score=sa_raw.get("mean_score", 0.0),
+                rating=sa_raw.get("rating", "N/A"),
+            )
+            sa_data[ticker] = sa
+
         result = score_stock(
             tech=tech,
             fund=fund_data.get(ticker),
             inst=inst,
+            sa=sa,
         )
         scores.append(result)
 
-    return scores, tech_data, price_data
+    return scores, tech_data, price_data, sa_data
 
 
 def color_signal(val):
@@ -163,37 +196,49 @@ with tab_analysis:
         fund_for_score = {k: FundamentalData(**v) for k, v in fund_dict.items()}
         inst_for_score = {k: InstitutionalData(**v) for k, v in inst_dict.items()}
 
-        scores, tech_data, price_data = fetch_and_score(tuple(all_tickers), fund_for_score, inst_for_score, fintel.enabled)
+        scores, tech_data, price_data, sa_data = fetch_and_score(tuple(all_tickers), fund_for_score, inst_for_score, fintel.enabled, sa_client.enabled)
 
         # --- Scores Table ---
         st.header("Swing Trade Scores")
 
         score_rows = []
         for s in sorted(scores, key=lambda x: x.composite_score, reverse=True):
-            score_rows.append({
+            row = {
                 "Ticker": s.ticker,
                 "Signal": s.signal.value.upper(),
                 "Composite": s.composite_score,
                 "Technical": s.technical_score,
                 "Fundamental": s.fundamental_score,
                 "Institutional": s.institutional_score,
+                "SA Score": s.sa_score,
                 "Entry": s.entry_price,
                 "Stop Loss": s.stop_loss,
                 "Target": s.target_price,
                 "Notes": s.notes,
-            })
+            }
+            # Add SA grade letters if available
+            sa_info = sa_data.get(s.ticker)
+            if sa_info:
+                from data.seekingalpha import GRADE_MAP
+                row["SA Rating"] = sa_info.rating
+                row["Momentum"] = GRADE_MAP.get(sa_info.momentum, "")
+                row["EPS Rev"] = GRADE_MAP.get(sa_info.eps_revisions, "")
+                row["Growth"] = GRADE_MAP.get(sa_info.growth, "")
+            score_rows.append(row)
 
         score_df = pd.DataFrame(score_rows)
 
-        styled_df = score_df.style.map(color_signal, subset=["Signal"]).map(color_composite, subset=["Composite"]).format({
+        format_dict = {
             "Composite": "{:.1f}",
             "Technical": "{:.1f}",
             "Fundamental": "{:.1f}",
             "Institutional": "{:.1f}",
+            "SA Score": "{:.1f}",
             "Entry": "${:,.2f}",
             "Stop Loss": "${:,.2f}",
             "Target": "${:,.2f}",
-        }, na_rep="N/A")
+        }
+        styled_df = score_df.style.map(color_signal, subset=["Signal"]).map(color_composite, subset=["Composite"]).format(format_dict, na_rep="N/A")
 
         st.dataframe(styled_df, use_container_width=True, hide_index=True)
 

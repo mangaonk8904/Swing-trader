@@ -26,9 +26,10 @@ class Settings(BaseSettings):
             self.seeking_alpha_rapidapi_key = _get_streamlit_secret("SEEKING_ALPHA_RAPIDAPI_KEY")
 
     # Scoring Weights (must sum to 1.0)
-    technical_weight: float = 0.35
-    fundamental_weight: float = 0.35
-    institutional_weight: float = 0.30
+    technical_weight: float = 0.30
+    fundamental_weight: float = 0.25
+    institutional_weight: float = 0.20
+    sa_weight: float = 0.25
 
     # Signal Thresholds
     strong_buy_threshold: float = 75.0
