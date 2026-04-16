@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas_ta as ta
 from io import BytesIO
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from data.yahoo import get_price_data, get_basic_fundamentals
 from data.excel_io import read_revenue_data, read_institutional_data, get_available_sheets
@@ -70,7 +70,7 @@ manual_list = [t.strip().upper() for t in manual_tickers.split(",") if t.strip()
 all_tickers = sorted(set(file_tickers + manual_list))
 
 # --- Tabs ---
-tab_analysis, tab_filings = st.tabs(["Analysis", "Fintel Filings"])
+tab_analysis, tab_filings, tab_watchlist = st.tabs(["Analysis", "Fintel Filings", "Watchlist Alerts"])
 
 
 # ===================== HELPER FUNCTIONS =====================
@@ -422,3 +422,130 @@ with tab_filings:
                         st.dataframe(df_insider.drop(columns=["URL"], errors="ignore"), use_container_width=True, hide_index=True)
                 else:
                     st.info(f"No insider trades found for {filing_ticker}")
+
+
+# ===================== WATCHLIST ALERTS TAB =====================
+
+# Default watchlist tickers
+DEFAULT_WATCHLIST = "AAPL, NVDA, MSFT, GOOGL, AMZN, META, TSLA"
+
+# Initialize session state for watchlist
+if "watchlist" not in st.session_state:
+    st.session_state.watchlist = []
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_watchlist_filings(tickers: tuple) -> dict[str, list[dict]]:
+    """Fetch 13F institutional ownership for all watchlist tickers."""
+    client = FintelClient()
+    if not client.enabled:
+        return {}
+    results = {}
+    for ticker in tickers:
+        try:
+            data = client.get_institutional_ownership(ticker)
+            if data:
+                results[ticker] = data
+        except Exception:
+            pass
+    return results
+
+
+with tab_watchlist:
+    st.header("Watchlist — New Institutional Filing Alerts")
+
+    if not fintel.enabled:
+        st.warning("Fintel API key not configured. Add FINTEL_API_KEY to your .env file or Streamlit secrets.")
+    else:
+        # --- Watchlist management ---
+        col_input, col_window = st.columns([3, 1])
+        with col_input:
+            watchlist_input = st.text_input(
+                "Watchlist tickers (comma-separated)",
+                value=DEFAULT_WATCHLIST,
+                key="watchlist_input",
+            )
+        with col_window:
+            alert_days = st.number_input("Alert window (days)", min_value=1, max_value=365, value=90, key="alert_days")
+
+        watchlist_tickers = sorted(set(t.strip().upper() for t in watchlist_input.split(",") if t.strip()))
+        cutoff_date = date.today() - timedelta(days=alert_days)
+
+        if not watchlist_tickers:
+            st.info("Enter tickers above to monitor for new institutional filings.")
+        else:
+            st.caption(f"Monitoring **{len(watchlist_tickers)}** tickers — showing filings since **{cutoff_date}**")
+
+            with st.spinner(f"Scanning {len(watchlist_tickers)} tickers for new filings..."):
+                all_filings = fetch_watchlist_filings(tuple(watchlist_tickers))
+
+            # Build alerts: filings newer than cutoff
+            alert_rows = []
+            for ticker in watchlist_tickers:
+                filings = all_filings.get(ticker, [])
+                for f in filings:
+                    file_date_str = f.get("fileDate") or ""
+                    if not file_date_str:
+                        continue
+                    try:
+                        file_date = datetime.strptime(file_date_str, "%Y-%m-%d").date()
+                    except ValueError:
+                        continue
+                    if file_date >= cutoff_date:
+                        alert_rows.append({
+                            "Ticker": ticker,
+                            "Institution": f.get("name") or "",
+                            "Form": f.get("formType") or "",
+                            "Filing Date": file_date_str,
+                            "Effective Date": f.get("effectiveDate") or "",
+                            "Shares": f.get("shares") or "",
+                            "Shares Change": f.get("sharesChange") or "",
+                            "Shares % Chg": f.get("sharesPercentChange") or "",
+                            "Ownership %": f.get("ownershipPercent") or "",
+                            "Value ($)": f.get("value") or "",
+                            "URL": f.get("url") or "",
+                        })
+
+            # --- Alert summary ---
+            tickers_with_alerts = sorted(set(r["Ticker"] for r in alert_rows))
+
+            if alert_rows:
+                st.success(f"**{len(alert_rows)}** new institutional filings across **{len(tickers_with_alerts)}** tickers in the last {alert_days} days")
+
+                # Per-ticker expandable sections
+                for ticker in tickers_with_alerts:
+                    ticker_rows = [r for r in alert_rows if r["Ticker"] == ticker]
+                    with st.expander(f"**{ticker}** — {len(ticker_rows)} new filing(s)", expanded=True):
+                        df_alert = pd.DataFrame(ticker_rows).drop(columns=["Ticker"])
+                        df_alert = df_alert.loc[:, df_alert.ne("").any()]
+                        if "URL" in df_alert.columns and df_alert["URL"].any():
+                            st.dataframe(
+                                df_alert,
+                                column_config={"URL": st.column_config.LinkColumn("Link", display_text="View")},
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+                        else:
+                            st.dataframe(df_alert.drop(columns=["URL"], errors="ignore"), use_container_width=True, hide_index=True)
+
+                # Full combined table
+                st.markdown("---")
+                st.subheader("All Recent Filings")
+                df_all = pd.DataFrame(alert_rows)
+                df_all = df_all.loc[:, df_all.ne("").any()]
+                if "URL" in df_all.columns and df_all["URL"].any():
+                    st.dataframe(
+                        df_all,
+                        column_config={"URL": st.column_config.LinkColumn("Link", display_text="View")},
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                else:
+                    st.dataframe(df_all.drop(columns=["URL"], errors="ignore"), use_container_width=True, hide_index=True)
+            else:
+                st.info(f"No new institutional filings found in the last {alert_days} days for your watchlist.")
+
+            # Show tickers with no data
+            no_data_tickers = [t for t in watchlist_tickers if t not in all_filings]
+            if no_data_tickers:
+                st.caption(f"No Fintel data available for: {', '.join(no_data_tickers)}")
