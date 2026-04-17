@@ -6,7 +6,7 @@ import pandas_ta as ta
 from io import BytesIO
 from datetime import date, datetime, timedelta
 
-from data.yahoo import get_price_data, get_basic_fundamentals
+from data.yahoo import get_price_data, get_basic_fundamentals, get_options_expirations, get_options_chain, get_all_options_summary
 from data.excel_io import read_revenue_data, read_institutional_data, get_available_sheets
 from data.fintel import FintelClient
 from data.seekingalpha import SeekingAlphaClient
@@ -75,7 +75,7 @@ manual_list = [t.strip().upper() for t in manual_tickers.split(",") if t.strip()
 all_tickers = sorted(set(file_tickers + manual_list))
 
 # --- Tabs ---
-tab_analysis, tab_filings, tab_watchlist = st.tabs(["Analysis", "Fintel Filings", "Watchlist Alerts"])
+tab_analysis, tab_options, tab_filings, tab_watchlist = st.tabs(["Analysis", "Options Flow", "Fintel Filings", "Watchlist Alerts"])
 
 
 # ===================== HELPER FUNCTIONS =====================
@@ -341,6 +341,185 @@ with tab_analysis:
 
         else:
             st.warning(f"No price data available for {selected_ticker}")
+
+
+# ===================== OPTIONS FLOW TAB =====================
+
+@st.cache_data(ttl=300, show_spinner="Fetching options data...")
+def fetch_options_summary(ticker: str):
+    return get_all_options_summary(ticker)
+
+
+@st.cache_data(ttl=300, show_spinner="Loading options chain...")
+def fetch_options_chain(ticker: str, expiry: str):
+    return get_options_chain(ticker, expiry)
+
+
+with tab_options:
+    st.header("Options Flow Analysis")
+
+    options_ticker = st.text_input("Enter ticker symbol", placeholder="AAPL", key="options_ticker")
+
+    if options_ticker:
+        options_ticker = options_ticker.strip().upper()
+
+        try:
+            summary = fetch_options_summary(options_ticker)
+        except ValueError as e:
+            st.warning(str(e))
+            summary = None
+        except Exception as e:
+            st.error(f"Error fetching options data: {e}")
+            summary = None
+
+        if summary:
+            # --- Section 1: Top-Level Metrics ---
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Current Price", f"${summary['current_price']:,.2f}" if summary['current_price'] else "N/A")
+            col2.metric("P/C Volume Ratio", f"{summary['pc_volume_ratio']:.2f}")
+            col3.metric("P/C OI Ratio", f"{summary['pc_oi_ratio']:.2f}")
+            total_vol = summary['total_call_volume'] + summary['total_put_volume']
+            col4.metric("Total Options Volume", f"{total_vol:,}")
+
+            # --- Section 2: Sentiment Signal ---
+            pcr = summary['pc_volume_ratio']
+            if pcr > 1.5:
+                st.error(f"**Extreme put activity (P/C {pcr:.2f})** — Heavy hedging or fear. Contrarian traders watch for reversals at these levels.")
+            elif pcr > 1.0:
+                st.warning(f"**Bearish / Hedging (P/C {pcr:.2f})** — Puts dominate. Possible downside protection or directional bearish bets.")
+            elif pcr >= 0.7:
+                st.info(f"**Neutral (P/C {pcr:.2f})** — Balanced call/put activity.")
+            else:
+                st.success(f"**Bullish (P/C {pcr:.2f})** — Calls dominate. Market expects upside.")
+
+            # --- Section 3: Volume & OI by Expiration ---
+            st.subheader("Volume & Open Interest by Expiration")
+            by_expiry = summary['by_expiry']
+            if by_expiry:
+                exp_df = pd.DataFrame(by_expiry)
+                col_vol, col_oi = st.columns(2)
+
+                with col_vol:
+                    fig_vol = go.Figure()
+                    fig_vol.add_trace(go.Bar(x=exp_df["expiry"], y=exp_df["call_volume"], name="Call Volume", marker_color="#2ecc71"))
+                    fig_vol.add_trace(go.Bar(x=exp_df["expiry"], y=exp_df["put_volume"], name="Put Volume", marker_color="#e74c3c"))
+                    fig_vol.update_layout(barmode="group", title="Volume by Expiration", height=350, margin=dict(t=40, b=20))
+                    st.plotly_chart(fig_vol, use_container_width=True)
+
+                with col_oi:
+                    fig_oi = go.Figure()
+                    fig_oi.add_trace(go.Bar(x=exp_df["expiry"], y=exp_df["call_oi"], name="Call OI", marker_color="#2ecc71"))
+                    fig_oi.add_trace(go.Bar(x=exp_df["expiry"], y=exp_df["put_oi"], name="Put OI", marker_color="#e74c3c"))
+                    fig_oi.update_layout(barmode="group", title="Open Interest by Expiration", height=350, margin=dict(t=40, b=20))
+                    st.plotly_chart(fig_oi, use_container_width=True)
+
+            # --- Section 4: Single-Expiry Deep Dive ---
+            st.subheader("Single Expiry Deep Dive")
+            expiry_list = summary['expirations']
+            selected_expiry = st.selectbox("Select expiration", expiry_list, key="options_expiry")
+
+            if selected_expiry:
+                try:
+                    chain = fetch_options_chain(options_ticker, selected_expiry)
+                except Exception as e:
+                    st.error(f"Error loading chain: {e}")
+                    chain = None
+
+                if chain:
+                    calls_df = chain["calls"]
+                    puts_df = chain["puts"]
+                    current_price = summary['current_price']
+
+                    col_butterfly, col_iv = st.columns(2)
+
+                    with col_butterfly:
+                        # Butterfly volume chart: calls right, puts left
+                        call_strikes = calls_df[calls_df["volume"].fillna(0) > 0]
+                        put_strikes = puts_df[puts_df["volume"].fillna(0) > 0]
+
+                        fig_bf = go.Figure()
+                        fig_bf.add_trace(go.Bar(
+                            y=call_strikes["strike"], x=call_strikes["volume"],
+                            name="Calls", orientation="h", marker_color="#2ecc71",
+                        ))
+                        fig_bf.add_trace(go.Bar(
+                            y=put_strikes["strike"], x=-put_strikes["volume"],
+                            name="Puts", orientation="h", marker_color="#e74c3c",
+                        ))
+                        if current_price:
+                            fig_bf.add_hline(y=current_price, line_dash="dash", line_color="white",
+                                             annotation_text=f"Price ${current_price:.2f}")
+                        fig_bf.update_layout(
+                            title="Volume by Strike", barmode="overlay", height=500,
+                            xaxis_title="Volume (puts negative)", yaxis_title="Strike",
+                            margin=dict(t=40, b=20),
+                        )
+                        st.plotly_chart(fig_bf, use_container_width=True)
+
+                    with col_iv:
+                        # IV smile/skew
+                        calls_iv = calls_df[calls_df["impliedVolatility"].fillna(0) > 0]
+                        puts_iv = puts_df[puts_df["impliedVolatility"].fillna(0) > 0]
+
+                        fig_iv = go.Figure()
+                        fig_iv.add_trace(go.Scatter(
+                            x=calls_iv["strike"], y=calls_iv["impliedVolatility"] * 100,
+                            name="Call IV", mode="lines+markers", line=dict(color="#2ecc71"),
+                        ))
+                        fig_iv.add_trace(go.Scatter(
+                            x=puts_iv["strike"], y=puts_iv["impliedVolatility"] * 100,
+                            name="Put IV", mode="lines+markers", line=dict(color="#e74c3c"),
+                        ))
+                        if current_price:
+                            fig_iv.add_vline(x=current_price, line_dash="dash", line_color="white",
+                                             annotation_text=f"${current_price:.2f}")
+                        fig_iv.update_layout(
+                            title="Implied Volatility Skew", height=500,
+                            xaxis_title="Strike", yaxis_title="IV (%)",
+                            margin=dict(t=40, b=20),
+                        )
+                        st.plotly_chart(fig_iv, use_container_width=True)
+
+                    # --- Section 5: Unusual Activity ---
+                    st.subheader("Unusual Activity")
+                    st.caption("Contracts where volume > 2x open interest — suggests new positions being opened")
+
+                    unusual_rows = []
+                    for side, df in [("CALL", calls_df), ("PUT", puts_df)]:
+                        for _, row in df.iterrows():
+                            vol = row.get("volume") or 0
+                            oi = row.get("openInterest") or 0
+                            if vol > 0 and oi > 0 and vol > 2 * oi:
+                                unusual_rows.append({
+                                    "Type": side,
+                                    "Strike": row["strike"],
+                                    "Volume": int(vol),
+                                    "Open Interest": int(oi),
+                                    "Vol/OI": round(vol / oi, 1),
+                                    "IV %": round((row.get("impliedVolatility") or 0) * 100, 1),
+                                    "Last Price": row.get("lastPrice") or 0,
+                                    "ITM": "Yes" if row.get("inTheMoney") else "No",
+                                })
+
+                    if unusual_rows:
+                        unusual_df = pd.DataFrame(unusual_rows).sort_values("Vol/OI", ascending=False)
+                        st.dataframe(
+                            unusual_df.style.format({
+                                "Strike": "${:,.2f}",
+                                "Last Price": "${:,.2f}",
+                                "IV %": "{:.1f}%",
+                            }),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.info("No unusual activity detected for this expiration.")
+
+                    # --- Section 6: Raw Chain ---
+                    with st.expander("View Full Calls Chain"):
+                        st.dataframe(calls_df, use_container_width=True, hide_index=True)
+                    with st.expander("View Full Puts Chain"):
+                        st.dataframe(puts_df, use_container_width=True, hide_index=True)
 
 
 # ===================== FINTEL FILINGS TAB =====================
