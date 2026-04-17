@@ -13,6 +13,7 @@ from data.seekingalpha import SeekingAlphaClient
 from analysis.technicals import compute_technicals
 from analysis.scoring import score_stock
 from schemas import FundamentalData, InstitutionalData, SeekingAlphaData, StockScore
+from config import settings
 
 st.set_page_config(page_title="Swing Trader", page_icon="📊", layout="wide")
 st.title("Swing Trader Dashboard")
@@ -515,7 +516,74 @@ with tab_options:
                     else:
                         st.info("No unusual activity detected for this expiration.")
 
-                    # --- Section 6: Raw Chain ---
+                    # --- Section 6: AI Analysis ---
+                    st.subheader("AI Analysis")
+
+                    if not settings.groq_api_key:
+                        st.warning("Groq API key not configured. Add GROQ_API_KEY to your .env file or Streamlit secrets.")
+                    elif st.button("Analyze Options Activity", key="ai_analyze_btn"):
+                        # Build context for the LLM
+                        total_cv = int(calls_df["volume"].fillna(0).sum())
+                        total_pv = int(puts_df["volume"].fillna(0).sum())
+                        total_coi = int(calls_df["openInterest"].fillna(0).sum())
+                        total_poi = int(puts_df["openInterest"].fillna(0).sum())
+                        exp_pcr = round(total_pv / total_cv, 2) if total_cv > 0 else 0
+
+                        # Top volume strikes
+                        top_calls = calls_df.nlargest(5, "volume")[["strike", "volume", "openInterest", "impliedVolatility"]].to_string(index=False)
+                        top_puts = puts_df.nlargest(5, "volume")[["strike", "volume", "openInterest", "impliedVolatility"]].to_string(index=False)
+
+                        # Unusual activity summary
+                        unusual_summary = ""
+                        if unusual_rows:
+                            unusual_summary = f"\nUnusual activity (volume > 2x OI):\n"
+                            for u in unusual_rows[:10]:
+                                unusual_summary += f"  {u['Type']} ${u['Strike']}: Vol={u['Volume']}, OI={u['Open Interest']}, Vol/OI={u['Vol/OI']}, IV={u['IV %']}%\n"
+
+                        prompt = f"""You are an expert options analyst advising a swing trader (1-week to 1-month holding period).
+
+Analyze this options data for {options_ticker} (expiry: {selected_expiry}, current price: ${summary['current_price']:.2f}):
+
+OVERALL SUMMARY (across {len(summary['expirations'])} expirations):
+- Total Call Volume: {summary['total_call_volume']:,} | Total Put Volume: {summary['total_put_volume']:,}
+- Put/Call Volume Ratio: {summary['pc_volume_ratio']:.2f}
+- Total Call OI: {summary['total_call_oi']:,} | Total Put OI: {summary['total_put_oi']:,}
+- Put/Call OI Ratio: {summary['pc_oi_ratio']:.2f}
+
+THIS EXPIRATION ({selected_expiry}):
+- Call Volume: {total_cv:,} | Put Volume: {total_pv:,} | P/C Ratio: {exp_pcr}
+- Call OI: {total_coi:,} | Put OI: {total_poi:,}
+
+Top 5 Call Strikes by Volume:
+{top_calls}
+
+Top 5 Put Strikes by Volume:
+{top_puts}
+{unusual_summary}
+Provide a concise analysis covering:
+1. **Sentiment**: What is the options market telling us — bullish, bearish, or mixed? Why?
+2. **Key Levels**: Which strike prices have significant positioning? What do they suggest as support/resistance?
+3. **Unusual Activity**: Any notable signals from volume spikes or unusual Vol/OI ratios?
+4. **Swing Trade Signal**: Based on this options data, what's the actionable takeaway for a 1-4 week swing trade?
+
+Keep it direct and actionable. No disclaimers."""
+
+                        with st.spinner("Analyzing with Llama..."):
+                            try:
+                                from groq import Groq
+                                client = Groq(api_key=settings.groq_api_key)
+                                response = client.chat.completions.create(
+                                    model="llama-3.3-70b-versatile",
+                                    messages=[{"role": "user", "content": prompt}],
+                                    temperature=0.3,
+                                    max_tokens=1000,
+                                )
+                                analysis = response.choices[0].message.content
+                                st.markdown(analysis)
+                            except Exception as e:
+                                st.error(f"AI analysis failed: {e}")
+
+                    # --- Section 7: Raw Chain ---
                     with st.expander("View Full Calls Chain"):
                         st.dataframe(calls_df, use_container_width=True, hide_index=True)
                     with st.expander("View Full Puts Chain"):
