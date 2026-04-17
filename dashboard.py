@@ -766,6 +766,69 @@ with tab_fundamentals:
             d5.metric("Short % of Float", _fmt_pct(f.get("short_percent_of_float")))
             d6.metric("Short Ratio", _fmt_ratio(f.get("short_ratio")))
 
+            # --- AI Fundamental Analysis ---
+            st.markdown("---")
+            _groq_key_fund = settings.groq_api_key or st.secrets.get("GROQ_API_KEY", "")
+            if not _groq_key_fund:
+                st.warning("Groq API key not configured. Add GROQ_API_KEY to your .env file or Streamlit secrets.")
+            elif st.button("Analyze Fundamentals", key="ai_fund_btn"):
+                prompt = f"""You are a senior equity research analyst advising a swing trader (1-week to 1-month hold).
+
+Analyze the fundamentals for {fund_ticker} ({f.get('name')}) — {f.get('sector')}, {f.get('industry')}:
+
+VALUATION:
+- Trailing P/E: {_fmt_ratio(f.get('trailing_pe'))} | Forward P/E: {_fmt_ratio(f.get('forward_pe'))}
+- PEG Ratio: {_fmt_ratio(f.get('peg_ratio'))} | Price/Book: {_fmt_ratio(f.get('price_to_book'))}
+- EV/EBITDA: {_fmt_ratio(f.get('ev_to_ebitda'))} | EV/Revenue: {_fmt_ratio(f.get('ev_to_revenue'))}
+
+EARNINGS & REVENUE:
+- Revenue: {_fmt_large_number(f.get('total_revenue'))} | Revenue Growth: {_fmt_pct(f.get('revenue_growth'))}
+- EPS (TTM): ${f.get('eps_trailing') or 'N/A'} | EPS (Forward): ${f.get('eps_forward') or 'N/A'}
+- Earnings Growth: {_fmt_pct(f.get('earnings_growth'))} | Quarterly Earnings Growth: {_fmt_pct(f.get('earnings_quarterly_growth'))}
+- EBITDA: {_fmt_large_number(f.get('ebitda'))}
+
+PROFITABILITY:
+- Gross Margin: {_fmt_pct(f.get('gross_margins'))} | Operating Margin: {_fmt_pct(f.get('operating_margins'))}
+- EBITDA Margin: {_fmt_pct(f.get('ebitda_margins'))} | Net Profit Margin: {_fmt_pct(f.get('profit_margins'))}
+- ROE: {_fmt_pct(f.get('return_on_equity'))} | ROA: {_fmt_pct(f.get('return_on_assets'))}
+
+BALANCE SHEET:
+- Cash: {_fmt_large_number(f.get('total_cash'))} | Debt: {_fmt_large_number(f.get('total_debt'))}
+- Debt/Equity: {_fmt_ratio(f.get('debt_to_equity'))} | Current Ratio: {_fmt_ratio(f.get('current_ratio'))}
+- Free Cash Flow: {_fmt_large_number(f.get('free_cashflow'))}
+
+OWNERSHIP:
+- Insider: {_fmt_pct(f.get('held_percent_insiders'))} | Institutional: {_fmt_pct(f.get('held_percent_institutions'))}
+- Short % of Float: {_fmt_pct(f.get('short_percent_of_float'))}
+
+PRICE:
+- Current: ${f.get('price') or 'N/A'} | 52W High: ${f.get('fifty_two_week_high') or 'N/A'} | 52W Low: ${f.get('fifty_two_week_low') or 'N/A'}
+
+Provide a concise analysis covering:
+1. **Verdict**: BUY, HOLD, or AVOID — state it clearly upfront
+2. **Valuation**: Is the stock fairly valued, overvalued, or undervalued? Compare P/E, PEG, EV/EBITDA to typical ranges
+3. **Growth**: Is revenue and earnings growth strong enough to justify the valuation?
+4. **Profitability**: Are margins healthy? Is the company efficiently run?
+5. **Financial Health**: Cash position vs debt — any red flags?
+6. **Risk Factors**: What could go wrong? Short interest, valuation stretch, margin compression?
+7. **Swing Trade Angle**: From a 1-4 week perspective, does the fundamental picture support a trade?
+
+Be direct and actionable. No disclaimers."""
+
+                with st.spinner("Analyzing fundamentals with Llama..."):
+                    try:
+                        from groq import Groq
+                        client = Groq(api_key=_groq_key_fund)
+                        response = client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.3,
+                            max_tokens=1200,
+                        )
+                        st.markdown(response.choices[0].message.content)
+                    except Exception as e:
+                        st.error(f"AI analysis failed: {e}")
+
 
 # ===================== OPTIONS FLOW TAB =====================
 
