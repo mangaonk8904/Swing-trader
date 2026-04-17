@@ -6,7 +6,7 @@ import pandas_ta as ta
 from io import BytesIO
 from datetime import date, datetime, timedelta
 
-from data.yahoo import get_price_data, get_basic_fundamentals, get_options_expirations, get_options_chain, get_all_options_summary
+from data.yahoo import get_price_data, get_basic_fundamentals, get_full_fundamentals, get_options_expirations, get_options_chain, get_all_options_summary
 from data.excel_io import read_revenue_data, read_institutional_data, get_available_sheets
 from data.fintel import FintelClient
 from data.seekingalpha import SeekingAlphaClient
@@ -76,7 +76,7 @@ manual_list = [t.strip().upper() for t in manual_tickers.split(",") if t.strip()
 all_tickers = sorted(set(file_tickers + manual_list))
 
 # --- Tabs ---
-tab_analysis, tab_options, tab_filings, tab_watchlist = st.tabs(["Analysis", "Options Flow", "Fintel Filings", "Watchlist Alerts"])
+tab_analysis, tab_fundamentals, tab_options, tab_filings, tab_watchlist = st.tabs(["Analysis", "Fundamentals", "Options Flow", "Fintel Filings", "Watchlist Alerts"])
 
 
 # ===================== HELPER FUNCTIONS =====================
@@ -342,6 +342,168 @@ with tab_analysis:
 
         else:
             st.warning(f"No price data available for {selected_ticker}")
+
+
+# ===================== FUNDAMENTALS TAB =====================
+
+def _fmt_large_number(val) -> str:
+    """Format large numbers as $1.2B, $345M, etc."""
+    if val is None:
+        return "N/A"
+    val = float(val)
+    if abs(val) >= 1e12:
+        return f"${val / 1e12:.2f}T"
+    elif abs(val) >= 1e9:
+        return f"${val / 1e9:.2f}B"
+    elif abs(val) >= 1e6:
+        return f"${val / 1e6:.1f}M"
+    else:
+        return f"${val:,.0f}"
+
+
+def _fmt_pct(val) -> str:
+    if val is None:
+        return "N/A"
+    return f"{val * 100:.1f}%"
+
+
+def _fmt_ratio(val) -> str:
+    if val is None:
+        return "N/A"
+    return f"{val:.2f}"
+
+
+@st.cache_data(ttl=600, show_spinner="Fetching fundamental data...")
+def fetch_fundamentals(ticker: str):
+    return get_full_fundamentals(ticker)
+
+
+with tab_fundamentals:
+    st.header("Fundamental Analysis")
+
+    fund_ticker = st.text_input("Enter ticker symbol", placeholder="AAPL", key="fund_ticker")
+
+    if fund_ticker:
+        fund_ticker = fund_ticker.strip().upper()
+
+        try:
+            f = fetch_fundamentals(fund_ticker)
+        except Exception as e:
+            st.error(f"Error fetching fundamentals: {e}")
+            f = None
+
+        if f:
+            # --- Company Header ---
+            st.subheader(f"{f['name']} ({fund_ticker})")
+            st.caption(f"{f.get('sector') or ''} — {f.get('industry') or ''}")
+
+            # --- Price Context ---
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Price", f"${f['price']:,.2f}" if f.get("price") else "N/A")
+            col2.metric("Market Cap", _fmt_large_number(f.get("market_cap")))
+            high52 = f.get("fifty_two_week_high")
+            low52 = f.get("fifty_two_week_low")
+            col3.metric("52-Week High", f"${high52:,.2f}" if high52 else "N/A")
+            col4.metric("52-Week Low", f"${low52:,.2f}" if low52 else "N/A")
+
+            st.markdown("---")
+
+            # --- Valuation ---
+            st.subheader("Valuation")
+            v1, v2, v3, v4, v5, v6 = st.columns(6)
+            v1.metric("Trailing P/E", _fmt_ratio(f.get("trailing_pe")))
+            v2.metric("Forward P/E", _fmt_ratio(f.get("forward_pe")))
+            v3.metric("PEG Ratio", _fmt_ratio(f.get("peg_ratio")))
+            v4.metric("Price/Book", _fmt_ratio(f.get("price_to_book")))
+            v5.metric("EV/EBITDA", _fmt_ratio(f.get("ev_to_ebitda")))
+            v6.metric("EV/Revenue", _fmt_ratio(f.get("ev_to_revenue")))
+
+            st.markdown("---")
+
+            # --- Earnings & Revenue ---
+            st.subheader("Earnings & Revenue")
+            e1, e2, e3, e4 = st.columns(4)
+            e1.metric("Total Revenue", _fmt_large_number(f.get("total_revenue")))
+            e2.metric("Revenue Growth", _fmt_pct(f.get("revenue_growth")))
+            e3.metric("EPS (TTM)", f"${f['eps_trailing']:.2f}" if f.get("eps_trailing") else "N/A")
+            e4.metric("EPS (Forward)", f"${f['eps_forward']:.2f}" if f.get("eps_forward") else "N/A")
+
+            e5, e6, e7, e8 = st.columns(4)
+            e5.metric("EBITDA", _fmt_large_number(f.get("ebitda")))
+            e6.metric("Earnings Growth", _fmt_pct(f.get("earnings_growth")))
+            e7.metric("Quarterly Earnings Growth", _fmt_pct(f.get("earnings_quarterly_growth")))
+            e8.metric("Revenue/Share", f"${f['revenue_per_share']:.2f}" if f.get("revenue_per_share") else "N/A")
+
+            st.markdown("---")
+
+            # --- Profitability ---
+            st.subheader("Profitability")
+            p1, p2, p3, p4, p5 = st.columns(5)
+            p1.metric("Gross Margin", _fmt_pct(f.get("gross_margins")))
+            p2.metric("Operating Margin", _fmt_pct(f.get("operating_margins")))
+            p3.metric("EBITDA Margin", _fmt_pct(f.get("ebitda_margins")))
+            p4.metric("Profit Margin", _fmt_pct(f.get("profit_margins")))
+            p5.metric("ROE", _fmt_pct(f.get("return_on_equity")))
+
+            # Margin comparison bar chart
+            margins = {
+                "Gross": f.get("gross_margins"),
+                "Operating": f.get("operating_margins"),
+                "EBITDA": f.get("ebitda_margins"),
+                "Net Profit": f.get("profit_margins"),
+            }
+            margin_names = [k for k, v in margins.items() if v is not None]
+            margin_vals = [v * 100 for v in margins.values() if v is not None]
+
+            if margin_vals:
+                colors = ["#2ecc71" if v > 20 else "#f39c12" if v > 10 else "#e74c3c" for v in margin_vals]
+                fig_margins = go.Figure(go.Bar(
+                    x=margin_names, y=margin_vals,
+                    marker_color=colors, text=[f"{v:.1f}%" for v in margin_vals], textposition="outside",
+                ))
+                fig_margins.update_layout(title="Margin Comparison", yaxis_title="%", height=300, margin=dict(t=40, b=20))
+                st.plotly_chart(fig_margins, use_container_width=True)
+
+            st.markdown("---")
+
+            # --- Balance Sheet & Cash Flow ---
+            st.subheader("Balance Sheet & Cash Flow")
+            b1, b2, b3, b4 = st.columns(4)
+            b1.metric("Total Cash", _fmt_large_number(f.get("total_cash")))
+            b2.metric("Total Debt", _fmt_large_number(f.get("total_debt")))
+            b3.metric("Debt/Equity", _fmt_ratio(f.get("debt_to_equity")))
+            b4.metric("Current Ratio", _fmt_ratio(f.get("current_ratio")))
+
+            b5, b6, b7, b8 = st.columns(4)
+            b5.metric("Free Cash Flow", _fmt_large_number(f.get("free_cashflow")))
+            b6.metric("Operating Cash Flow", _fmt_large_number(f.get("operating_cashflow")))
+            b7.metric("Book Value/Share", f"${f['book_value']:.2f}" if f.get("book_value") else "N/A")
+            b8.metric("ROA", _fmt_pct(f.get("return_on_assets")))
+
+            # Cash vs Debt visual
+            cash = f.get("total_cash") or 0
+            debt = f.get("total_debt") or 0
+            if cash or debt:
+                fig_cd = go.Figure()
+                fig_cd.add_trace(go.Bar(x=["Cash"], y=[cash], name="Cash", marker_color="#2ecc71"))
+                fig_cd.add_trace(go.Bar(x=["Debt"], y=[debt], name="Debt", marker_color="#e74c3c"))
+                fig_cd.update_layout(title="Cash vs Debt", height=300, margin=dict(t=40, b=20),
+                                     yaxis_tickprefix="$", yaxis_tickformat=",")
+                st.plotly_chart(fig_cd, use_container_width=True)
+
+            st.markdown("---")
+
+            # --- Dividends & Ownership ---
+            st.subheader("Dividends & Ownership")
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Dividend Yield", _fmt_pct(f.get("dividend_yield")))
+            d2.metric("Payout Ratio", _fmt_pct(f.get("payout_ratio")))
+            d3.metric("Insider Ownership", _fmt_pct(f.get("held_percent_insiders")))
+            d4.metric("Institutional Ownership", _fmt_pct(f.get("held_percent_institutions")))
+
+            d5, d6, _, _ = st.columns(4)
+            d5.metric("Short % of Float", _fmt_pct(f.get("short_percent_of_float")))
+            d6.metric("Short Ratio", _fmt_ratio(f.get("short_ratio")))
 
 
 # ===================== OPTIONS FLOW TAB =====================

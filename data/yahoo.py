@@ -117,3 +117,64 @@ def get_basic_fundamentals(ticker: str) -> dict:
         "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
         "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
     }
+
+
+def get_full_fundamentals(ticker: str) -> dict:
+    """Fetch comprehensive fundamental data from Yahoo Finance."""
+    stock = yf.Ticker(ticker)
+    info = stock.info
+    return {
+        # Company Info
+        "name": info.get("shortName", ticker),
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "market_cap": info.get("marketCap"),
+        # Valuation
+        "trailing_pe": info.get("trailingPE"),
+        "forward_pe": info.get("forwardPE"),
+        "peg_ratio": info.get("pegRatio"),
+        "price_to_book": info.get("priceToBook"),
+        "ev_to_ebitda": info.get("enterpriseToEbitda"),
+        "ev_to_revenue": info.get("enterpriseToRevenue"),
+        # Earnings & Revenue
+        "total_revenue": info.get("totalRevenue"),
+        "revenue_per_share": info.get("revenuePerShare"),
+        "revenue_growth": info.get("revenueGrowth"),
+        "eps_trailing": info.get("trailingEps"),
+        "eps_forward": info.get("epsForward"),
+        "eps_current_year": info.get("epsCurrentYear"),
+        "earnings_growth": info.get("earningsGrowth"),
+        "earnings_quarterly_growth": info.get("earningsQuarterlyGrowth"),
+        # Profitability
+        "ebitda": info.get("ebitda"),
+        "ebitda_margins": info.get("ebitdaMargins"),
+        "gross_margins": info.get("grossMargins"),
+        "operating_margins": info.get("operatingMargins"),
+        "profit_margins": info.get("profitMargins"),
+        "return_on_equity": info.get("returnOnEquity"),
+        "return_on_assets": info.get("returnOnAssets"),
+        # Balance Sheet
+        "total_cash": info.get("totalCash"),
+        "total_cash_per_share": info.get("totalCashPerShare"),
+        "total_debt": info.get("totalDebt"),
+        "debt_to_equity": info.get("debtToEquity"),
+        "current_ratio": info.get("currentRatio"),
+        "quick_ratio": info.get("quickRatio"),
+        "book_value": info.get("bookValue"),
+        # Cash Flow
+        "free_cashflow": info.get("freeCashflow"),
+        "operating_cashflow": info.get("operatingCashflow"),
+        # Dividends
+        "dividend_yield": info.get("dividendYield"),
+        "payout_ratio": info.get("payoutRatio"),
+        # Ownership
+        "held_percent_insiders": info.get("heldPercentInsiders"),
+        "held_percent_institutions": info.get("heldPercentInstitutions"),
+        "short_ratio": info.get("shortRatio"),
+        "short_percent_of_float": info.get("shortPercentOfFloat"),
+        # Price Context
+        "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
+        "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
+        "fifty_two_week_change_pct": info.get("fiftyTwoWeekChangePercent"),
+        "price": info.get("currentPrice") or info.get("regularMarketPrice"),
+    }
