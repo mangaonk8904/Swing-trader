@@ -1,10 +1,28 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 from plotly.subplots import make_subplots
 import pandas_ta as ta
 from io import BytesIO
 from datetime import date, datetime, timedelta
+
+# --- Glassmorphism Plotly Theme ---
+GLASS_PLOTLY = dict(
+    layout=go.Layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(15,23,42,0.4)",
+        font=dict(family="Fira Sans, sans-serif", color="#E2E8F0", size=13),
+        title_font=dict(family="Fira Sans, sans-serif", color="#F8FAFC", size=16),
+        xaxis=dict(gridcolor="rgba(148,163,184,0.1)", zerolinecolor="rgba(148,163,184,0.15)"),
+        yaxis=dict(gridcolor="rgba(148,163,184,0.1)", zerolinecolor="rgba(148,163,184,0.15)"),
+        legend=dict(bgcolor="rgba(15,23,42,0.5)", bordercolor="rgba(255,255,255,0.08)", borderwidth=1),
+        colorway=["#22C55E", "#EF4444", "#3B82F6", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#F97316"],
+        margin=dict(t=40, b=20, l=20, r=20),
+    )
+)
+pio.templates["glassmorphism"] = go.layout.Template(**GLASS_PLOTLY)
+pio.templates.default = "glassmorphism"
 
 from data.yahoo import get_price_data, get_basic_fundamentals, get_full_fundamentals, get_options_expirations, get_options_chain, get_all_options_summary
 from data.excel_io import read_revenue_data, read_institutional_data, get_available_sheets
@@ -16,6 +34,249 @@ from schemas import FundamentalData, InstitutionalData, SeekingAlphaData, StockS
 from config import settings
 
 st.set_page_config(page_title="Swing Trader", page_icon="📊", layout="wide")
+
+# --- Glassmorphism Theme CSS ---
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
+/* Global font */
+html, body, [class*="css"] {
+    font-family: 'Fira Sans', sans-serif;
+}
+code, pre, .stCodeBlock {
+    font-family: 'Fira Code', monospace;
+}
+
+/* Main background gradient */
+.stApp {
+    background: linear-gradient(135deg, #020617 0%, #0F172A 40%, #1E293B 100%);
+}
+
+/* Glass card effect for containers */
+[data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"] {
+    background: rgba(15, 23, 42, 0.6);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 1rem;
+}
+
+/* Metric cards - glass effect */
+[data-testid="stMetric"] {
+    background: rgba(30, 41, 59, 0.5);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    transition: all 0.2s ease;
+}
+[data-testid="stMetric"]:hover {
+    background: rgba(30, 41, 59, 0.7);
+    border-color: rgba(34, 197, 94, 0.3);
+    box-shadow: 0 4px 20px rgba(34, 197, 94, 0.1);
+}
+[data-testid="stMetricLabel"] {
+    color: #94A3B8 !important;
+    font-size: 0.85rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+}
+[data-testid="stMetricValue"] {
+    color: #F8FAFC !important;
+    font-family: 'Fira Code', monospace;
+    font-weight: 600;
+}
+
+/* Tab styling */
+.stTabs [data-baseweb="tab-list"] {
+    background: rgba(15, 23, 42, 0.5);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 4px;
+    gap: 4px;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 8px;
+    color: #94A3B8;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+.stTabs [data-baseweb="tab"]:hover {
+    color: #F8FAFC;
+    background: rgba(255, 255, 255, 0.05);
+}
+.stTabs [aria-selected="true"] {
+    background: rgba(34, 197, 94, 0.15) !important;
+    color: #22C55E !important;
+    border-bottom-color: #22C55E !important;
+}
+.stTabs [data-baseweb="tab-highlight"] {
+    background-color: #22C55E !important;
+}
+
+/* DataFrame / table styling */
+[data-testid="stDataFrame"] {
+    background: rgba(15, 23, 42, 0.4);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+/* Sidebar glass effect */
+[data-testid="stSidebar"] {
+    background: rgba(2, 6, 23, 0.85) !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Expander styling */
+[data-testid="stExpander"] {
+    background: rgba(15, 23, 42, 0.4);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+}
+
+/* Input fields */
+.stTextInput > div > div {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #F8FAFC;
+    transition: border-color 0.2s ease;
+}
+.stTextInput > div > div:focus-within {
+    border-color: rgba(34, 197, 94, 0.5);
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.15);
+}
+
+/* Selectbox */
+.stSelectbox > div > div {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+}
+
+/* Buttons */
+.stButton > button {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22C55E;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    border-radius: 8px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+.stButton > button:hover {
+    background: rgba(34, 197, 94, 0.25);
+    border-color: rgba(34, 197, 94, 0.5);
+    box-shadow: 0 4px 16px rgba(34, 197, 94, 0.2);
+}
+
+/* Download button */
+.stDownloadButton > button {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+.stDownloadButton > button:hover {
+    background: rgba(30, 41, 59, 0.7);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Alert boxes */
+.stAlert {
+    background: rgba(15, 23, 42, 0.5);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-radius: 10px;
+}
+
+/* Success alert (bullish) */
+[data-testid="stAlert"][data-baseweb*="positive"],
+.element-container .stSuccess {
+    border-left-color: #22C55E !important;
+}
+
+/* Warning alert */
+[data-testid="stAlert"][data-baseweb*="warning"],
+.element-container .stWarning {
+    border-left-color: #F59E0B !important;
+}
+
+/* Error alert (bearish) */
+[data-testid="stAlert"][data-baseweb*="negative"],
+.element-container .stError {
+    border-left-color: #EF4444 !important;
+}
+
+/* Headers */
+h1 {
+    font-family: 'Fira Sans', sans-serif !important;
+    font-weight: 700 !important;
+    color: #F8FAFC !important;
+    letter-spacing: -0.02em;
+}
+h2, h3 {
+    font-family: 'Fira Sans', sans-serif !important;
+    font-weight: 600 !important;
+    color: #E2E8F0 !important;
+}
+
+/* Plotly chart container */
+.js-plotly-plot {
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+/* Spinner */
+.stSpinner > div {
+    border-top-color: #22C55E !important;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.3);
+}
+::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.3);
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.5);
+}
+
+/* Number input */
+.stNumberInput > div > div {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+}
+
+/* File uploader */
+[data-testid="stFileUploader"] {
+    background: rgba(15, 23, 42, 0.4);
+    border: 1px dashed rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("Swing Trader Dashboard")
 
 # --- Sidebar ---
@@ -159,23 +420,23 @@ def fetch_and_score(tickers: tuple, fund_data: dict, inst_data: dict, fintel_ena
 
 def color_signal(val):
     colors = {
-        "STRONG_BUY": "background-color: #1a7a1a; color: white",
-        "BUY": "background-color: #2ecc71; color: white",
-        "NEUTRAL": "background-color: #f39c12; color: white",
-        "PASS": "background-color: #e74c3c; color: white",
+        "STRONG_BUY": "background-color: rgba(34,197,94,0.25); color: #22C55E; border-radius: 6px",
+        "BUY": "background-color: rgba(34,197,94,0.15); color: #4ADE80; border-radius: 6px",
+        "NEUTRAL": "background-color: rgba(245,158,11,0.15); color: #FBBF24; border-radius: 6px",
+        "PASS": "background-color: rgba(239,68,68,0.15); color: #F87171; border-radius: 6px",
     }
     return colors.get(val, "")
 
 
 def color_composite(val):
     if val >= 75:
-        return "background-color: #1a7a1a; color: white"
+        return "background-color: rgba(34,197,94,0.25); color: #22C55E"
     elif val >= 55:
-        return "background-color: #2ecc71; color: white"
+        return "background-color: rgba(34,197,94,0.15); color: #4ADE80"
     elif val >= 40:
-        return "background-color: #f39c12; color: white"
+        return "background-color: rgba(245,158,11,0.15); color: #FBBF24"
     else:
-        return "background-color: #e74c3c; color: white"
+        return "background-color: rgba(239,68,68,0.15); color: #F87171"
 
 
 def to_excel_bytes(df: pd.DataFrame) -> bytes:
@@ -456,7 +717,7 @@ with tab_fundamentals:
             margin_vals = [v * 100 for v in margins.values() if v is not None]
 
             if margin_vals:
-                colors = ["#2ecc71" if v > 20 else "#f39c12" if v > 10 else "#e74c3c" for v in margin_vals]
+                colors = ["#22C55E" if v > 20 else "#F59E0B" if v > 10 else "#EF4444" for v in margin_vals]
                 fig_margins = go.Figure(go.Bar(
                     x=margin_names, y=margin_vals,
                     marker_color=colors, text=[f"{v:.1f}%" for v in margin_vals], textposition="outside",
@@ -485,8 +746,8 @@ with tab_fundamentals:
             debt = f.get("total_debt") or 0
             if cash or debt:
                 fig_cd = go.Figure()
-                fig_cd.add_trace(go.Bar(x=["Cash"], y=[cash], name="Cash", marker_color="#2ecc71"))
-                fig_cd.add_trace(go.Bar(x=["Debt"], y=[debt], name="Debt", marker_color="#e74c3c"))
+                fig_cd.add_trace(go.Bar(x=["Cash"], y=[cash], name="Cash", marker_color="#22C55E"))
+                fig_cd.add_trace(go.Bar(x=["Debt"], y=[debt], name="Debt", marker_color="#EF4444"))
                 fig_cd.update_layout(title="Cash vs Debt", height=300, margin=dict(t=40, b=20),
                                      yaxis_tickprefix="$", yaxis_tickformat=",")
                 st.plotly_chart(fig_cd, use_container_width=True)
@@ -564,15 +825,15 @@ with tab_options:
 
                 with col_vol:
                     fig_vol = go.Figure()
-                    fig_vol.add_trace(go.Bar(x=exp_df["expiry"], y=exp_df["call_volume"], name="Call Volume", marker_color="#2ecc71"))
-                    fig_vol.add_trace(go.Bar(x=exp_df["expiry"], y=exp_df["put_volume"], name="Put Volume", marker_color="#e74c3c"))
+                    fig_vol.add_trace(go.Bar(x=exp_df["expiry"], y=exp_df["call_volume"], name="Call Volume", marker_color="#22C55E"))
+                    fig_vol.add_trace(go.Bar(x=exp_df["expiry"], y=exp_df["put_volume"], name="Put Volume", marker_color="#EF4444"))
                     fig_vol.update_layout(barmode="group", title="Volume by Expiration", height=350, margin=dict(t=40, b=20))
                     st.plotly_chart(fig_vol, use_container_width=True)
 
                 with col_oi:
                     fig_oi = go.Figure()
-                    fig_oi.add_trace(go.Bar(x=exp_df["expiry"], y=exp_df["call_oi"], name="Call OI", marker_color="#2ecc71"))
-                    fig_oi.add_trace(go.Bar(x=exp_df["expiry"], y=exp_df["put_oi"], name="Put OI", marker_color="#e74c3c"))
+                    fig_oi.add_trace(go.Bar(x=exp_df["expiry"], y=exp_df["call_oi"], name="Call OI", marker_color="#22C55E"))
+                    fig_oi.add_trace(go.Bar(x=exp_df["expiry"], y=exp_df["put_oi"], name="Put OI", marker_color="#EF4444"))
                     fig_oi.update_layout(barmode="group", title="Open Interest by Expiration", height=350, margin=dict(t=40, b=20))
                     st.plotly_chart(fig_oi, use_container_width=True)
 
@@ -603,14 +864,14 @@ with tab_options:
                         fig_bf = go.Figure()
                         fig_bf.add_trace(go.Bar(
                             y=call_strikes["strike"], x=call_strikes["volume"],
-                            name="Calls", orientation="h", marker_color="#2ecc71",
+                            name="Calls", orientation="h", marker_color="#22C55E",
                         ))
                         fig_bf.add_trace(go.Bar(
                             y=put_strikes["strike"], x=-put_strikes["volume"],
-                            name="Puts", orientation="h", marker_color="#e74c3c",
+                            name="Puts", orientation="h", marker_color="#EF4444",
                         ))
                         if current_price:
-                            fig_bf.add_hline(y=current_price, line_dash="dash", line_color="white",
+                            fig_bf.add_hline(y=current_price, line_dash="dash", line_color="#94A3B8",
                                              annotation_text=f"Price ${current_price:.2f}")
                         fig_bf.update_layout(
                             title="Volume by Strike", barmode="overlay", height=500,
@@ -627,14 +888,14 @@ with tab_options:
                         fig_iv = go.Figure()
                         fig_iv.add_trace(go.Scatter(
                             x=calls_iv["strike"], y=calls_iv["impliedVolatility"] * 100,
-                            name="Call IV", mode="lines+markers", line=dict(color="#2ecc71"),
+                            name="Call IV", mode="lines+markers", line=dict(color="#22C55E"),
                         ))
                         fig_iv.add_trace(go.Scatter(
                             x=puts_iv["strike"], y=puts_iv["impliedVolatility"] * 100,
-                            name="Put IV", mode="lines+markers", line=dict(color="#e74c3c"),
+                            name="Put IV", mode="lines+markers", line=dict(color="#EF4444"),
                         ))
                         if current_price:
-                            fig_iv.add_vline(x=current_price, line_dash="dash", line_color="white",
+                            fig_iv.add_vline(x=current_price, line_dash="dash", line_color="#94A3B8",
                                              annotation_text=f"${current_price:.2f}")
                         fig_iv.update_layout(
                             title="Implied Volatility Skew", height=500,
