@@ -519,7 +519,9 @@ with tab_options:
                     # --- Section 6: AI Analysis ---
                     st.subheader("AI Analysis")
 
-                    if not settings.groq_api_key:
+                    # Resolve Groq key: config (.env) first, then Streamlit secrets
+                    _groq_key = settings.groq_api_key or st.secrets.get("GROQ_API_KEY", "")
+                    if not _groq_key:
                         st.warning("Groq API key not configured. Add GROQ_API_KEY to your .env file or Streamlit secrets.")
                     elif st.button("Analyze Options Activity", key="ai_analyze_btn"):
                         # Build context for the LLM
@@ -571,7 +573,7 @@ Keep it direct and actionable. No disclaimers."""
                         with st.spinner("Analyzing with Llama..."):
                             try:
                                 from groq import Groq
-                                client = Groq(api_key=settings.groq_api_key)
+                                client = Groq(api_key=_groq_key)
                                 response = client.chat.completions.create(
                                     model="llama-3.3-70b-versatile",
                                     messages=[{"role": "user", "content": prompt}],

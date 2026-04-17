@@ -8,7 +8,10 @@ def _get_streamlit_secret(key: str) -> str:
     """Try to read a key from Streamlit secrets (available on Streamlit Cloud)."""
     try:
         import streamlit as st
-        return st.secrets.get(key, "")
+        # Access via dict-style to support both nested and flat secrets
+        if hasattr(st, "secrets") and key in st.secrets:
+            return str(st.secrets[key])
+        return ""
     except Exception:
         return ""
 
