@@ -1,0 +1,59 @@
+# Pylint configuration for Swing Trader.
+#
+# The intent is to keep pylint catching real defects (errors, unused names,
+# broken inference) while not fighting conventions this codebase has already
+# settled on. Anything disabled here is a deliberate project convention, not a
+# latent bug — each group says why.
+
+[MAIN]
+# The project targets 3.12 (.python-version, pyproject.toml requires-python).
+py-version = 3.12
+jobs = 0
+
+[MESSAGES CONTROL]
+disable =
+    # This repo documents behaviour in module headers and reads top-down; it has
+    # never carried per-symbol docstrings.
+    missing-module-docstring,
+    missing-class-docstring,
+    missing-function-docstring,
+
+    # Analysis and Streamlit code is legitimately wide: scoring functions carry
+    # many locals, and the dashboard is one long script by design.
+    too-many-locals,
+    too-many-branches,
+    too-many-statements,
+    too-many-arguments,
+    too-many-positional-arguments,
+    too-many-lines,
+    too-few-public-methods,
+    duplicate-code,
+
+    # Plotly's API is keyword-oriented; dict(...) matches its own documentation
+    # and reads better than braces inside nested figure specs.
+    use-dict-literal,
+
+    # A Streamlit script runs top to bottom, so module-level names are ordinary
+    # variables rather than the constants pylint assumes them to be. The same
+    # shape makes imports-after-setup and shadowed names unavoidable.
+    invalid-name,
+    redefined-outer-name,
+    wrong-import-order,
+    wrong-import-position,
+    ungrouped-imports,
+
+    # Network calls (yfinance, Fintel, Seeking Alpha, Groq) are wrapped broadly
+    # on purpose: one failing provider must degrade a panel, never the page.
+    broad-exception-caught,
+
+    # Deliberate lazy imports — streamlit inside config's secrets fallback, and
+    # the chart engine inside the CLI command so `--help` stays fast.
+    import-outside-toplevel,
+
+    # No line limit is enforced today and the existing files run to ~170 chars.
+    # Adopting one is worth doing, but as its own formatting pass rather than
+    # as a drive-by inside unrelated changes.
+    line-too-long,
+
+    no-else-return,
+    f-string-without-interpolation,

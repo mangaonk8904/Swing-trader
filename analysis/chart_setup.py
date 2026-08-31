@@ -662,9 +662,9 @@ def _collect_candidates(
     out = []
     for c in _merge_candidates(cands, long, atr):
         near_edge = c.high if long else c.low
-        if long and near_edge <= price * 1.015 and near_edge >= price - 4 * atr:
+        if long and price - 4 * atr <= near_edge <= price * 1.015:
             out.append(c)
-        elif not long and near_edge >= price * 0.985 and near_edge <= price + 4 * atr:
+        elif not long and price * 0.985 <= near_edge <= price + 4 * atr:
             out.append(c)
     return out
 
@@ -780,7 +780,7 @@ def build_setup(
         status = SetupStatus.WAIT
 
     kinds = sorted(set(best.kinds))
-    setup_type = _name_setup(long, kinds, read, status)
+    setup_type = _name_setup(long, kinds, read)
 
     confluences = sorted(set(best.labels))
     confluences.append(f"{read.label} structure {read.structure}")
@@ -837,7 +837,7 @@ def build_setup(
     return setup
 
 
-def _name_setup(long: bool, kinds: list[str], read: TimeframeRead, status: SetupStatus) -> str:
+def _name_setup(long: bool, kinds: list[str], read: TimeframeRead) -> str:
     side = "Long" if long else "Short"
     if any("order block" in k for k in kinds):
         base = "pullback into order block"

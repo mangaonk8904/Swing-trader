@@ -24,7 +24,12 @@ GLASS_PLOTLY = dict(
 pio.templates["glassmorphism"] = go.layout.Template(**GLASS_PLOTLY)
 pio.templates.default = "glassmorphism"
 
-from data.yahoo import get_price_data, get_basic_fundamentals, get_full_fundamentals, get_options_expirations, get_options_chain, get_all_options_summary
+from data.yahoo import (
+    get_price_data,
+    get_full_fundamentals,
+    get_options_chain,
+    get_all_options_summary,
+)
 from data.excel_io import read_revenue_data, read_institutional_data, get_available_sheets
 from data.fintel import FintelClient
 from data.seekingalpha import SeekingAlphaClient
@@ -36,7 +41,7 @@ from analysis.chart_setup import (
     position_size,
 )
 from analysis.scoring import score_stock
-from schemas import FundamentalData, InstitutionalData, SeekingAlphaData, StockScore
+from schemas import FundamentalData, InstitutionalData, SeekingAlphaData
 from config import settings
 
 st.set_page_config(page_title="Swing Trader", page_icon="📊", layout="wide")
@@ -301,7 +306,8 @@ inst_map: dict[str, InstitutionalData] = {}
 
 if uploaded_file:
     # Save to temp for openpyxl
-    import tempfile, os
+    import tempfile
+    import os
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(uploaded_file.getvalue())
         tmp_path = tmp.name

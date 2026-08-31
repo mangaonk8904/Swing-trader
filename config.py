@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     seeking_alpha_rapidapi_key: str = ""
     groq_api_key: str = ""
 
-    def model_post_init(self, __context) -> None:
+    def model_post_init(self, __context) -> None:  # pylint: disable=arguments-differ
         # Fall back to Streamlit secrets if env vars are empty
         if not self.fintel_api_key:
             self.fintel_api_key = _get_streamlit_secret("FINTEL_API_KEY")

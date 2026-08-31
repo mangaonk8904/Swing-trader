@@ -1,6 +1,5 @@
 import pandas as pd
 import pandas_ta as ta
-from datetime import date
 from schemas import TechnicalSnapshot
 from config import settings
 
