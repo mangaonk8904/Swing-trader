@@ -1,6 +1,11 @@
 name: Lint and test
 
-on: [push, pull_request]
+# Pull requests are covered by the pull_request trigger; scoping push to main
+# keeps a PR branch from running the same commit twice.
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
   build:
