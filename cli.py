@@ -260,5 +260,92 @@ def scan(
         console.print(inst_table)
 
 
+@app.command()
+def chart(
+    tickers: List[str] = typer.Argument(..., help="Tickers to read, e.g. NVDA AAPL"),
+    timeframes: str = typer.Option("1wk,1d,4h,1h", "--timeframes", "-t", help="Comma-separated: 1wk,1d,4h,1h,15m"),
+    entry_tf: str = typer.Option("1d", "--entry-tf", "-e", help="Timeframe the entry zone is drawn from"),
+    account: float = typer.Option(0.0, "--account", "-a", help="Account size, to size the position"),
+    risk_pct: float = typer.Option(1.0, "--risk", "-r", help="Percent of account risked per trade"),
+):
+    """Read a chart across timeframes and print the best entry setup."""
+    from analysis.chart_setup import analyze_chart, position_size
+
+    tf_list = [t.strip() for t in timeframes.split(",") if t.strip()]
+
+    for raw in tickers:
+        ticker = raw.upper().strip()
+        try:
+            a = analyze_chart(ticker, tf_list, entry_tf)
+        except Exception as exc:
+            console.print(f"[red]{ticker}: {exc}[/red]")
+            continue
+
+        bias_color = {"long": "green", "short": "red"}.get(a.bias.value, "yellow")
+        console.print(
+            f"\n[bold]{a.ticker}[/bold]  [dim]{a.as_of}[/dim]  ${a.price:,.2f}   "
+            f"[{bias_color}]{a.bias_label}[/{bias_color}]  "
+            f"(bias {a.bias_score:+.0f}, {a.alignment_pct:.0f}% of weight aligned)"
+        )
+
+        tf_table = Table(title="Timeframe read", show_lines=False)
+        for col in ("TF", "Trend", "Score", "Structure", "Last event", "EMA", "RSI", "ADX", "ATR%", "Vol"):
+            tf_table.add_column(col)
+        for r in a.timeframes:
+            color = "green" if r.trend_score > 10 else "red" if r.trend_score < -10 else "yellow"
+            tf_table.add_row(
+                r.label, f"[{color}]{r.trend}[/{color}]", f"{r.trend_score:+.0f}", r.structure,
+                r.last_event or "-", r.ema_stack,
+                f"{r.rsi_14:.0f}" if r.rsi_14 else "-",
+                f"{r.adx_14:.0f}" if r.adx_14 else "-",
+                f"{r.atr_pct:.1f}" if r.atr_pct else "-",
+                f"{r.rel_volume:.2f}x" if r.rel_volume else "-",
+            )
+        console.print(tf_table)
+
+        s = a.setup
+        if s.direction.value == "none" or s.entry_ref is None:
+            console.print(f"[yellow]No setup:[/yellow] {s.setup_type}. {s.invalidation}")
+            continue
+
+        status_note = {
+            "at_entry": "[green]price is in the zone now[/green]",
+            "approaching": "[cyan]price is within 1 ATR of the zone[/cyan]",
+            "wait": "[yellow]wait for the pullback[/yellow]",
+        }.get(s.status.value, s.status.value)
+
+        console.print(
+            f"\n[bold]{s.setup_type}[/bold]  —  grade [bold]{s.grade}[/bold] "
+            f"({s.confidence:.0f}/100), {status_note}"
+        )
+        plan = Table(show_header=False, box=None, padding=(0, 2))
+        plan.add_row("Entry zone", f"{s.entry_low:,.2f} – {s.entry_high:,.2f}  (work {s.entry_ref:,.2f}, {s.distance_to_entry_pct:+.1f}% away)")
+        plan.add_row("Stop", f"{s.stop:,.2f}   risk {s.risk_per_share:,.2f}/share ({s.risk_per_share / s.entry_ref * 100:.1f}%)")
+        plan.add_row("Target 1", f"{s.target_1:,.2f}   {s.rr_target_1:.2f}R")
+        plan.add_row("Target 2", f"{s.target_2:,.2f}   {s.rr_target_2:.2f}R")
+        plan.add_row("Target 3", f"{s.target_3:,.2f}")
+        if account > 0:
+            shares = position_size(s.risk_per_share, account, risk_pct)
+            plan.add_row(
+                "Size",
+                f"{shares:,} shares  (${shares * s.entry_ref:,.0f} notional, "
+                f"risking {risk_pct:.1f}% = ${account * risk_pct / 100:,.0f})",
+            )
+        console.print(plan)
+
+        console.print("\n[bold]Why:[/bold]")
+        for c in s.confluences:
+            console.print(f"  · {c}")
+        console.print("\n[bold]Wait for:[/bold]")
+        for t in s.triggers:
+            console.print(f"  · {t}")
+        console.print(f"\n[bold]Invalidation:[/bold] {s.invalidation}")
+        for n in s.notes:
+            console.print(f"[yellow]  ! {n}[/yellow]")
+        for w in a.warnings:
+            console.print(f"[dim]  ~ {w}[/dim]")
+        console.print("[dim]Structural read of price data, not investment advice.[/dim]")
+
+
 if __name__ == "__main__":
     app()
