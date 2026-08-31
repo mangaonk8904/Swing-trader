@@ -1,23 +1,35 @@
-name: Pylint
+name: Lint and test
 
-on: [push]
+# Pull requests are covered by the pull_request trigger; scoping push to main
+# keeps a PR branch from running the same commit twice.
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.8", "3.9", "3.10"]
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pylint
-    - name: Analysing the code with pylint
-      run: |
-        pylint $(git ls-files '*.py')
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # The project pins 3.12 (.python-version / requires-python) and uses
+      # syntax that older interpreters cannot parse.
+      - name: Set up Python
+        run: uv python install 3.12
+
+      # Dependencies have to be present or pylint reports import-error for
+      # every third-party module and the run says nothing about the code.
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Lint
+        run: uv run pylint $(git ls-files '*.py')
+
+      - name: Test
+        run: uv run pytest -q

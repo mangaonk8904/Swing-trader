@@ -24,13 +24,24 @@ GLASS_PLOTLY = dict(
 pio.templates["glassmorphism"] = go.layout.Template(**GLASS_PLOTLY)
 pio.templates.default = "glassmorphism"
 
-from data.yahoo import get_price_data, get_basic_fundamentals, get_full_fundamentals, get_options_expirations, get_options_chain, get_all_options_summary
+from data.yahoo import (
+    get_price_data,
+    get_full_fundamentals,
+    get_options_chain,
+    get_all_options_summary,
+)
 from data.excel_io import read_revenue_data, read_institutional_data, get_available_sheets
 from data.fintel import FintelClient
 from data.seekingalpha import SeekingAlphaClient
 from analysis.technicals import compute_technicals
+from analysis.chart_setup import (
+    TF_SPECS,
+    analyze_chart,
+    fetch_timeframes,
+    position_size,
+)
 from analysis.scoring import score_stock
-from schemas import FundamentalData, InstitutionalData, SeekingAlphaData, StockScore
+from schemas import FundamentalData, InstitutionalData, SeekingAlphaData
 from config import settings
 
 st.set_page_config(page_title="Swing Trader", page_icon="📊", layout="wide")
@@ -295,7 +306,8 @@ inst_map: dict[str, InstitutionalData] = {}
 
 if uploaded_file:
     # Save to temp for openpyxl
-    import tempfile, os
+    import tempfile
+    import os
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(uploaded_file.getvalue())
         tmp_path = tmp.name
@@ -337,7 +349,9 @@ manual_list = [t.strip().upper() for t in manual_tickers.split(",") if t.strip()
 all_tickers = sorted(set(file_tickers + manual_list))
 
 # --- Tabs ---
-tab_analysis, tab_fundamentals, tab_options, tab_filings, tab_watchlist = st.tabs(["Analysis", "Fundamentals", "Options Flow", "Fintel Filings", "Watchlist Alerts"])
+tab_analysis, tab_chart, tab_fundamentals, tab_options, tab_filings, tab_watchlist = st.tabs(
+    ["Analysis", "Chart Setup", "Fundamentals", "Options Flow", "Fintel Filings", "Watchlist Alerts"]
+)
 
 
 # ===================== HELPER FUNCTIONS =====================
@@ -1329,3 +1343,322 @@ with tab_watchlist:
             no_data_tickers = [t for t in watchlist_tickers if t not in all_filings]
             if no_data_tickers:
                 st.caption(f"No Fintel data available for: {', '.join(no_data_tickers)}")
+
+
+# ===================== CHART SETUP TAB =====================
+
+def _trend_arrow(score: float) -> str:
+    if score >= 25:
+        return "▲"
+    if score <= -25:
+        return "▼"
+    return "▬"
+
+
+ZONE_STYLE = {
+    "bullish_ob": ("rgba(34,197,94,0.16)", "#22C55E", "Bullish OB"),
+    "bearish_ob": ("rgba(239,68,68,0.16)", "#EF4444", "Bearish OB"),
+    "bullish_fvg": ("rgba(6,182,212,0.12)", "#06B6D4", "Bullish FVG"),
+    "bearish_fvg": ("rgba(249,115,22,0.12)", "#F97316", "Bearish FVG"),
+}
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def run_chart_analysis(ticker: str, tfs: tuple, entry_tf: str):
+    """Fetch every timeframe once, then read the chart. Cached for 15 minutes."""
+    frames, warnings = fetch_timeframes(ticker, list(tfs))
+    analysis = analyze_chart(ticker, list(tfs), entry_tf, frames=frames, warnings=warnings)
+    return analysis, frames
+
+
+def build_setup_chart(df: pd.DataFrame, analysis, tf_key: str, bars: int = 180) -> go.Figure:
+    """Candles + EMAs + volume, with the zones and the trade plan drawn on top."""
+    view = df.tail(bars)
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        row_heights=[0.78, 0.22], vertical_spacing=0.03,
+    )
+
+    fig.add_trace(
+        go.Candlestick(
+            x=view.index, open=view["Open"], high=view["High"],
+            low=view["Low"], close=view["Close"], name="Price",
+            increasing_line_color="#22C55E", increasing_fillcolor="#22C55E",
+            decreasing_line_color="#EF4444", decreasing_fillcolor="#EF4444",
+        ),
+        row=1, col=1,
+    )
+
+    for span, color in ((20, "#F59E0B"), (50, "#3B82F6"), (200, "#8B5CF6")):
+        if len(df) >= span:
+            ema = df["Close"].ewm(span=span, adjust=False).mean().tail(bars)
+            fig.add_trace(
+                go.Scatter(x=view.index, y=ema, name=f"EMA{span}", mode="lines",
+                           line=dict(color=color, width=1.2)),
+                row=1, col=1,
+            )
+
+    vol_colors = ["#22C55E" if c >= o else "#EF4444"
+                  for c, o in zip(view["Close"], view["Open"])]
+    fig.add_trace(
+        go.Bar(x=view.index, y=view["Volume"], name="Volume",
+               marker_color=vol_colors, opacity=0.45, showlegend=False),
+        row=2, col=1,
+    )
+
+    x0, x1 = view.index[0], view.index[-1]
+    lo, hi = float(view["Low"].min()), float(view["High"].max())
+
+    def in_view(*prices) -> bool:
+        pad = (hi - lo) * 0.35
+        return all(lo - pad <= p <= hi + pad for p in prices)
+
+    # Only draw the structure that's near enough to matter — a chart covered in
+    # boxes hides the one zone the plan is built on.
+    spot = float(view["Close"].iloc[-1])
+    tf_atr = float((view["High"] - view["Low"]).tail(14).mean()) or spot * 0.02
+    near = max(3.5 * tf_atr, (hi - lo) * 0.12)
+
+    for z in analysis.zones:
+        if z.timeframe != tf_key or not in_view(z.top, z.bottom):
+            continue
+        if min(abs(z.top - spot), abs(z.bottom - spot)) > near:
+            continue
+        fill, line, _ = ZONE_STYLE.get(z.kind, ("rgba(148,163,184,0.1)", "#94A3B8", z.kind))
+        fig.add_shape(
+            type="rect", xref="x", yref="y", x0=x0, x1=x1, y0=z.bottom, y1=z.top,
+            fillcolor=fill, line=dict(color=line, width=0.6, dash="dot"),
+            layer="below", row=1, col=1,
+        )
+
+    s = analysis.setup
+    if s.entry_low and s.entry_high and in_view(s.entry_low, s.entry_high):
+        fig.add_shape(
+            type="rect", xref="x", yref="y", x0=x0, x1=x1, y0=s.entry_low, y1=s.entry_high,
+            fillcolor="rgba(59,130,246,0.22)", line=dict(color="#3B82F6", width=1.4),
+            layer="below", row=1, col=1,
+        )
+        fig.add_annotation(x=x1, y=s.entry_high, text=f"Entry {s.entry_low:,.2f}–{s.entry_high:,.2f}",
+                           showarrow=False, xanchor="right", yanchor="bottom",
+                           font=dict(color="#93C5FD", size=11), row=1, col=1)
+
+    plan_lines = [
+        (s.stop, "#EF4444", f"Stop {s.stop:,.2f}" if s.stop else ""),
+        (s.target_1, "#22C55E", f"T1 {s.target_1:,.2f} ({s.rr_target_1:.2f}R)" if s.target_1 else ""),
+        (s.target_2, "#16A34A", f"T2 {s.target_2:,.2f} ({s.rr_target_2:.2f}R)" if s.target_2 else ""),
+        (s.target_3, "#15803D", f"T3 {s.target_3:,.2f}" if s.target_3 else ""),
+    ]
+    for value, color, label in plan_lines:
+        if value is None or not in_view(value):
+            continue
+        fig.add_hline(y=value, line=dict(color=color, width=1.2, dash="dash"),
+                      annotation_text=label, annotation_position="right",
+                      annotation_font=dict(color=color, size=11), row=1, col=1)
+
+    # Levels already inside the entry band are redundant — the band shows them.
+    in_zone = (
+        (lambda v: s.entry_low <= v <= s.entry_high)
+        if s.entry_low and s.entry_high else (lambda v: False)
+    )
+    nearest_levels = [lv for lv in analysis.levels if not in_zone(lv.price)]
+    nearest_levels = sorted(nearest_levels, key=lambda lv: abs(lv.price - spot))[:5]
+    for lv in nearest_levels:
+        if not in_view(lv.price):
+            continue
+        fig.add_hline(y=lv.price, line=dict(color="rgba(148,163,184,0.35)", width=0.8, dash="dot"),
+                      annotation_text=f"{lv.price:,.2f} ×{lv.touches}",
+                      annotation_position="left",
+                      annotation_font=dict(color="#94A3B8", size=9), row=1, col=1)
+
+    fig.update_layout(
+        height=620,
+        title=f"{analysis.ticker} — {TF_SPECS[tf_key].label}",
+        xaxis_rangeslider_visible=False,
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.02, yanchor="bottom"),
+        margin=dict(t=50, b=20, l=20, r=90),
+    )
+    # Hide the gaps that make intraday equity charts look broken.
+    if tf_key in ("15m", "1h", "4h"):
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"]), dict(bounds=[16, 9.5], pattern="hour")])
+    elif tf_key == "1d":
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    fig.update_yaxes(title_text="Price", row=1, col=1)
+    fig.update_yaxes(title_text="Vol", row=2, col=1)
+    return fig
+
+
+with tab_chart:
+    st.subheader("Chart Setup")
+    st.caption(
+        "Reads price structure across timeframes — swings, breaks of structure, order "
+        "blocks, imbalances and level clusters — then proposes one entry, stop and "
+        "target ladder. Structural read of price data, not investment advice."
+    )
+
+    c1, c2, c3, c4 = st.columns([2, 3, 1.4, 1.4])
+    with c1:
+        default_ticker = all_tickers[0] if all_tickers else "NVDA"
+        chart_ticker = st.text_input("Ticker", value=default_ticker, key="chart_ticker").upper().strip()
+    with c2:
+        chart_tfs = st.multiselect(
+            "Timeframes", options=list(TF_SPECS.keys()),
+            default=["1wk", "1d", "4h", "1h"],
+            format_func=lambda k: TF_SPECS[k].label, key="chart_tfs",
+        )
+    with c3:
+        entry_tf = st.selectbox(
+            "Entry timeframe", options=chart_tfs or ["1d"],
+            index=(chart_tfs.index("1d") if "1d" in chart_tfs else 0),
+            format_func=lambda k: TF_SPECS[k].label, key="chart_entry_tf",
+        )
+    with c4:
+        account_size = st.number_input("Account ($)", min_value=0, value=0, step=1000, key="chart_account")
+
+    if not chart_ticker:
+        st.info("Enter a ticker to analyze.")
+    elif not chart_tfs:
+        st.warning("Pick at least one timeframe.")
+    else:
+        with st.spinner(f"Reading {chart_ticker} across {len(chart_tfs)} timeframes…"):
+            try:
+                analysis, frames = run_chart_analysis(chart_ticker, tuple(chart_tfs), entry_tf)
+            except Exception as exc:
+                analysis, frames = None, None
+                st.error(f"Could not analyze {chart_ticker}: {exc}")
+
+        if analysis:
+            setup = analysis.setup
+            bias_color = {"long": "#22C55E", "short": "#EF4444"}.get(analysis.bias.value, "#F59E0B")
+            status_text = {
+                "at_entry": "Price is in the entry zone now",
+                "approaching": "Within 1 ATR of the entry zone",
+                "wait": "Valid setup — wait for the pullback",
+                "no_setup": "No actionable setup",
+            }[setup.status.value]
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Price ($)", f"{analysis.price:,.2f}", help=f"As of {analysis.as_of}")
+            m2.metric("Bias", f"{analysis.bias_score:+.0f}", analysis.bias_label, delta_color="off")
+            m3.metric("TF alignment", f"{analysis.alignment_pct:.0f}%",
+                      help="Share of timeframe weight agreeing with the bias")
+            m4.metric("Setup grade", setup.grade, f"{setup.confidence:.0f}/100", delta_color="off")
+
+            distance = (
+                f" · entry is {setup.distance_to_entry_pct:+.1f}% from spot"
+                if setup.distance_to_entry_pct is not None else ""
+            )
+            st.markdown(
+                f"<div style='padding:0.55rem 0.9rem;border-radius:10px;margin:0.4rem 0 0.8rem;"
+                f"background:rgba(59,130,246,0.12);border:1px solid {bias_color}44;'>"
+                f"<span style='color:{bias_color};font-weight:600'>{status_text}</span>"
+                f"<span style='color:#94A3B8'>{distance}</span></div>",
+                unsafe_allow_html=True,
+            )
+
+            for w in analysis.warnings:
+                st.warning(w)
+
+            chart_tf = st.radio(
+                "Chart", options=[k for k in chart_tfs if k in frames],
+                format_func=lambda k: TF_SPECS[k].label,
+                index=[k for k in chart_tfs if k in frames].index(entry_tf) if entry_tf in frames else 0,
+                horizontal=True, key="chart_view_tf",
+            )
+            st.plotly_chart(
+                build_setup_chart(frames[chart_tf], analysis, chart_tf),
+                use_container_width=True,
+            )
+
+            left, right = st.columns([1.15, 1])
+            with left:
+                st.markdown(f"### {setup.setup_type or 'No setup'}")
+                if setup.entry_ref is None:
+                    st.info(setup.invalidation or "No actionable entry right now.")
+                else:
+                    risk_pct_price = setup.risk_per_share / setup.entry_ref * 100
+                    plan = pd.DataFrame(
+                        [
+                            ("Entry zone", f"{setup.entry_low:,.2f} – {setup.entry_high:,.2f}", ""),
+                            ("Work the order at", f"{setup.entry_ref:,.2f}", f"{setup.distance_to_entry_pct:+.1f}% from spot"),
+                            ("Stop", f"{setup.stop:,.2f}", f"risk {setup.risk_per_share:,.2f}/sh ({risk_pct_price:.1f}%)"),
+                            ("Target 1", f"{setup.target_1:,.2f}", f"{setup.rr_target_1:.2f}R"),
+                            ("Target 2", f"{setup.target_2:,.2f}", f"{setup.rr_target_2:.2f}R"),
+                            ("Target 3", f"{setup.target_3:,.2f}", ""),
+                        ],
+                        columns=["", "Price", "Note"],
+                    )
+                    st.dataframe(plan, hide_index=True, use_container_width=True)
+
+                    if account_size > 0:
+                        risk_pct = st.slider("Risk per trade (%)", 0.25, 3.0, 1.0, 0.25, key="chart_risk_pct")
+                        shares = position_size(setup.risk_per_share, account_size, risk_pct)
+                        st.success(
+                            f"**{shares:,} shares** — ${shares * setup.entry_ref:,.0f} notional, "
+                            f"risking ${account_size * risk_pct / 100:,.0f} if the stop hits."
+                        )
+
+                    st.markdown(f"**Invalidation** — {setup.invalidation}")
+                    for n in setup.notes:
+                        st.warning(n)
+
+            with right:
+                if setup.confluences:
+                    st.markdown("### Why this zone")
+                    for c in setup.confluences:
+                        st.markdown(f"- {c}")
+                if setup.triggers:
+                    st.markdown("### Wait for")
+                    for t in setup.triggers:
+                        st.markdown(f"- {t}")
+
+            st.markdown("### Timeframe read")
+            tf_df = pd.DataFrame(
+                [
+                    {
+                        "TF": r.label,
+                        "Trend": f"{_trend_arrow(r.trend_score)} {r.trend}",
+                        "Score": r.trend_score,
+                        "Structure": r.structure, "Last event": r.last_event or "—",
+                        "EMA stack": r.ema_stack, "RSI": r.rsi_14, "ADX": r.adx_14,
+                        "ATR %": r.atr_pct, "Rel vol": r.rel_volume,
+                        "Swing high": r.swing_high, "Swing low": r.swing_low,
+                    }
+                    for r in analysis.timeframes
+                ]
+            )
+            st.dataframe(
+                tf_df, hide_index=True, use_container_width=True,
+                column_config={
+                    "Score": st.column_config.ProgressColumn(
+                        "Score", help="-100 (bearish) to +100 (bullish)",
+                        min_value=-100, max_value=100, format="%.0f",
+                    )
+                },
+            )
+
+            with st.expander("Zones and levels the read is built on"):
+                zc, lc = st.columns(2)
+                with zc:
+                    st.markdown("**Unmitigated zones**")
+                    if analysis.zones:
+                        st.dataframe(
+                            pd.DataFrame([
+                                {"TF": TF_SPECS[z.timeframe].label, "Kind": z.kind.replace("_", " "),
+                                 "Low": z.bottom, "High": z.top, "Created": z.created_at,
+                                 "Tested": z.tested, "Impulse (ATR)": z.strength}
+                                for z in analysis.zones
+                            ]), hide_index=True, use_container_width=True,
+                        )
+                    else:
+                        st.caption("No unmitigated zones in range.")
+                with lc:
+                    st.markdown("**Level clusters**")
+                    st.dataframe(
+                        pd.DataFrame([
+                            {"Price": lv.price, "Kind": lv.kind, "Touches": lv.touches,
+                             "Timeframes": ", ".join(TF_SPECS[t].label for t in lv.timeframes),
+                             "Last touch": lv.last_touch}
+                            for lv in analysis.levels
+                        ]), hide_index=True, use_container_width=True,
+                    )

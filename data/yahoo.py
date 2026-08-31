@@ -178,3 +178,32 @@ def get_full_fundamentals(ticker: str) -> dict:
         "fifty_two_week_change_pct": info.get("fiftyTwoWeekChangePercent"),
         "price": info.get("currentPrice") or info.get("regularMarketPrice"),
     }
+
+
+def get_ohlcv(ticker: str, interval: str = "1d", period: str = "2y") -> pd.DataFrame:
+    """Fetch OHLCV at an arbitrary interval, normalised for the chart analyzer.
+
+    Intraday intervals are regular-session only (no pre/post) so the bar
+    structure matches what a TradingView chart shows by default.
+    """
+    intraday = interval.endswith(("m", "h"))
+    df = yf.Ticker(ticker).history(period=period, interval=interval, prepost=False)
+    if df is None or df.empty:
+        raise ValueError(f"No {interval} price data for {ticker}")
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+    # The most recent intraday bar is still forming; drop it so structure and
+    # pivots are computed on closed candles only.
+    if intraday and len(df) > 1:
+        df = df.iloc[:-1]
+    return df
+
+
+def resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """Aggregate a lower-timeframe frame up (e.g. 1h -> 4h)."""
+    out = df.resample(rule).agg(
+        {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+    )
+    return out.dropna(subset=["Open", "High", "Low", "Close"])
