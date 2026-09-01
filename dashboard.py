@@ -34,6 +34,13 @@ from data.excel_io import read_revenue_data, read_institutional_data, get_availa
 from data.fintel import FintelClient
 from data.seekingalpha import SeekingAlphaClient
 from analysis.technicals import compute_technicals
+from analysis.institutional_flow import (
+    apply_categories,
+    build_narrative_prompt,
+    classify_with_llm,
+    parse_holders,
+    summarize,
+)
 from analysis.chart_setup import (
     TF_SPECS,
     analyze_chart,
@@ -1093,6 +1100,84 @@ Keep it direct and actionable. No disclaimers."""
 
 
 # ===================== FINTEL FILINGS TAB =====================
+# ===================== FINTEL FILINGS TAB =====================
+
+def _resolve_groq_key() -> str:
+    """Groq key from .env first, then Streamlit Cloud secrets."""
+    try:
+        return settings.groq_api_key or st.secrets.get("GROQ_API_KEY", "")
+    except Exception:
+        return settings.groq_api_key or ""
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def classify_institutions(names: tuple) -> tuple[dict, str]:
+    """Label each institution by type. Returns (labels, status_note).
+
+    Falls back to name heuristics whenever the model is unavailable — the
+    summary must still render, just with less confident labels.
+    """
+    key = _resolve_groq_key()
+    if not key:
+        return {}, "no-key"
+    try:
+        return classify_with_llm(list(names), key), "ok"
+    except Exception as exc:
+        return {}, f"failed: {type(exc).__name__}"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def institutional_narrative(prompt: str) -> tuple[str, str]:
+    """Written interpretation of the computed flow. Returns (text, status)."""
+    key = _resolve_groq_key()
+    if not key:
+        return "", "no-key"
+    try:
+        from groq import Groq
+        client = Groq(api_key=key)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=900,
+        )
+        return response.choices[0].message.content, "ok"
+    except Exception as exc:
+        return "", f"failed: {type(exc).__name__}"
+
+
+CATEGORY_BADGE = {
+    "hedge fund": "🟣 hedge fund",
+    "index/passive": "⚪ index/passive",
+    "mutual fund": "🔵 mutual fund",
+    "bank/broker": "🟠 bank/broker",
+    "pension/sovereign": "🟡 pension/sovereign",
+    "other": "⚫ other",
+}
+
+
+def _holder_table(moves: list) -> pd.DataFrame:
+    df = pd.DataFrame(
+        [
+            {
+                "Institution": m.name,
+                "Type": CATEGORY_BADGE.get(m.category.value, m.category.value),
+                "Shares Δ": m.shares_change,
+                "% Δ": round(m.shares_pct_change, 2) if m.shares_pct_change is not None else None,
+                "Value Δ ($)": m.value_change,
+                "Own %": round(m.ownership_pct, 2) if m.ownership_pct is not None else None,
+                "New": "✳️" if m.is_new_position else "",
+                "As of": m.as_of,
+            }
+            for m in moves
+        ]
+    )
+    # Missing values must render blank, not as the string "None".
+    for col in ("Shares Δ", "% Δ", "Value Δ ($)", "Own %"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
 with tab_filings:
     st.header("Fintel Filings Lookup")
 
@@ -1216,6 +1301,100 @@ with tab_filings:
                         st.dataframe(df_insider.drop(columns=["URL"], errors="ignore"), use_container_width=True, hide_index=True)
                 else:
                     st.info(f"No insider trades found for {filing_ticker}")
+
+            # --- Institutional flow summary ---
+            st.markdown("---")
+            st.subheader(f"Institutional Flow Summary — {filing_ticker}")
+
+            if not inst_ownership:
+                st.info("No 13F/NPORT holdings available, so there is nothing to summarize.")
+            else:
+                moves = parse_holders(inst_ownership)
+                labels, class_status = classify_institutions(tuple(m.name for m in moves))
+                moves = apply_categories(moves, labels)
+                flow = summarize(filing_ticker, moves)
+
+                if class_status == "no-key":
+                    st.caption(
+                        "Institution types inferred from names — add GROQ_API_KEY for model-assisted "
+                        "classification."
+                    )
+                elif class_status != "ok":
+                    st.caption(f"Model classification unavailable ({class_status}); using name heuristics.")
+
+                tone = (
+                    "#22C55E" if flow.sentiment_score >= 15
+                    else "#EF4444" if flow.sentiment_score <= -15
+                    else "#F59E0B"
+                )
+                st.markdown(
+                    f"<div style='padding:0.6rem 0.9rem;border-radius:10px;margin:0.3rem 0 0.9rem;"
+                    f"background:rgba(59,130,246,0.10);border:1px solid {tone}55;'>"
+                    f"<span style='color:{tone};font-weight:600;font-size:1.05rem'>"
+                    f"{flow.sentiment_label}</span>"
+                    f"<span style='color:#94A3B8'> · score {flow.sentiment_score:+.0f} on −100…+100 · "
+                    f"{flow.buyers} of {flow.holders} holders added</span></div>",
+                    unsafe_allow_html=True,
+                )
+
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Buy breadth", f"{flow.buy_breadth:.0f}%",
+                          help="Share of holders that moved which added rather than reduced")
+                k2.metric("Net shares", f"{flow.net_shares:+,.0f}")
+                k3.metric("Net value ($)", _fmt_large_number(flow.net_value))
+                k4.metric("New positions", f"{flow.new_positions}")
+
+                c_buy, c_sell = st.columns(2)
+                with c_buy:
+                    st.markdown("**Largest adds**")
+                    if flow.top_buyers:
+                        st.dataframe(_holder_table(flow.top_buyers), hide_index=True,
+                                     use_container_width=True)
+                    else:
+                        st.caption("No holder increased its position.")
+                with c_sell:
+                    st.markdown("**Largest reductions**")
+                    if flow.top_sellers:
+                        st.dataframe(_holder_table(flow.top_sellers), hide_index=True,
+                                     use_container_width=True)
+                    else:
+                        st.caption("No holder reduced its position.")
+
+                if flow.hedge_funds:
+                    st.markdown("**Hedge funds in this set**")
+                    st.dataframe(_holder_table(flow.hedge_funds), hide_index=True,
+                                 use_container_width=True)
+                else:
+                    st.info(
+                        "No holder here was classified as a hedge fund. Fintel returns the largest "
+                        "holders, which for a large cap are index, bank and mutual fund managers — "
+                        "hedge funds show up more often on smaller names."
+                    )
+
+                if flow.by_category:
+                    st.markdown("**Net share change by institution type**")
+                    cat_df = pd.DataFrame(
+                        [{"Type": CATEGORY_BADGE.get(k, k), "Net shares": v}
+                         for k, v in sorted(flow.by_category.items(), key=lambda kv: -abs(kv[1]))]
+                    )
+                    st.dataframe(cat_df, hide_index=True, use_container_width=True)
+
+                narrative, narr_status = institutional_narrative(build_narrative_prompt(flow))
+                if narrative:
+                    st.markdown("**What this means**")
+                    st.markdown(narrative)
+                elif narr_status == "no-key":
+                    st.caption("Add GROQ_API_KEY to get a written interpretation of these numbers.")
+                else:
+                    st.caption(f"Written summary unavailable ({narr_status}). The figures above are unaffected.")
+
+                for c in flow.caveats:
+                    st.warning(c)
+                st.caption(
+                    "13F and NPORT filings are submitted up to 45 days after quarter end, so this is "
+                    "a lagging record of past positioning — not current activity. Descriptive data, "
+                    "not investment advice."
+                )
 
 
 # ===================== WATCHLIST ALERTS TAB =====================
