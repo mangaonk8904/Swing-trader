@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 
+ANTHROPIC = "anthropic"
 OPENROUTER = "openrouter"
 GROQ = "groq"
 
@@ -27,6 +28,15 @@ _APP_URL = "https://github.com/mangaonk8904/Swing-trader"
 # Ordered best-first per provider. Anything the account cannot see is skipped,
 # so a wrong guess here costs nothing — resolution checks the live catalogue.
 PREFERRED_MODELS: dict[str, list[str]] = {
+    # Anthropic first-party. Opus 5 leads: this reads 13F flow and chart
+    # structure, where a fluent-but-wrong paragraph is the costly failure mode.
+    ANTHROPIC: [
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-sonnet-5",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+    ],
     # Verified against OpenRouter's live catalogue. Quality-first: this reads
     # 13F flow and chart structure, where a fluent-but-wrong answer is the
     # failure mode that costs money. Set LLM_MODEL to pin something cheaper.
@@ -62,31 +72,43 @@ _NON_CHAT = re.compile(r"(whisper|tts|guard|embed|moderation|rerank|-image|:batc
 
 
 class NoProviderConfigured(RuntimeError):
-    """Neither an OpenRouter nor a Groq key is available."""
+    """No provider key is available."""
 
 
 class NoUsableModel(RuntimeError):
     """The provider exposes no chat model we can use."""
 
 
-def resolve_provider(openrouter_key: str = "", groq_key: str = "", preference: str = "") -> str:
-    """Which provider to use. An explicit preference wins if its key exists."""
+def resolve_provider(
+    anthropic_key: str = "",
+    openrouter_key: str = "",
+    groq_key: str = "",
+    preference: str = "",
+) -> str:
+    """Which provider to use. An explicit preference wins if its key exists.
+
+    Order is quality-first: Anthropic direct, then OpenRouter, then Groq. A
+    preference naming a provider with no key falls through rather than failing —
+    the panel should still work.
+    """
+    keys = {ANTHROPIC: anthropic_key, OPENROUTER: openrouter_key, GROQ: groq_key}
     preference = (preference or "").strip().lower()
-    if preference == OPENROUTER and openrouter_key:
-        return OPENROUTER
-    if preference == GROQ and groq_key:
-        return GROQ
-    if openrouter_key:
-        return OPENROUTER
-    if groq_key:
-        return GROQ
+    if preference in keys and keys[preference]:
+        return preference
+    for provider in (ANTHROPIC, OPENROUTER, GROQ):
+        if keys[provider]:
+            return provider
     raise NoProviderConfigured(
-        "No LLM key configured — set OPENROUTER_API_KEY or GROQ_API_KEY."
+        "No LLM key configured — set ANTHROPIC_API_KEY, OPENROUTER_API_KEY or GROQ_API_KEY."
     )
 
 
 def make_client(provider: str, api_key: str):
-    """An OpenAI-compatible client for the provider. Imported lazily."""
+    """A client for the provider. Imported lazily so one SDK can be absent."""
+    if provider == ANTHROPIC:
+        from anthropic import Anthropic
+
+        return Anthropic(api_key=api_key)
     if provider == OPENROUTER:
         from openai import OpenAI
 
@@ -128,30 +150,60 @@ def resolve_model(client, provider: str, override: str = "") -> str:
     return usable[0]
 
 
-def chat(
-    prompt: str,
-    *,
-    openrouter_key: str = "",
-    groq_key: str = "",
-    provider_preference: str = "",
-    model: str = "",
-    temperature: float = 0.3,
-    max_tokens: int = 1000,
-    want_json: bool = False,
-) -> tuple[str, str]:
-    """Send one prompt. Returns (text, "provider/model" actually used).
+class Refused(RuntimeError):
+    """The model declined the request on safety grounds."""
 
-    JSON mode is requested when asked for but not required: models that reject
-    `response_format` are retried without it, since callers parse defensively.
+
+# Effort and adaptive thinking exist on current Claude models but 400 on older
+# ones; model resolution can land anywhere, so the richer request is attempted
+# and quietly retried without the extras.
+_EFFORT_LEVELS = {"low", "medium", "high", "xhigh", "max"}
+
+
+def _anthropic_text(response) -> str:
+    """Join the text blocks, skipping thinking and tool blocks."""
+    return "".join(
+        block.text for block in response.content if getattr(block, "type", "") == "text"
+    ).strip()
+
+
+def _chat_anthropic(client, model: str, prompt: str, max_tokens: int, effort: str) -> str:
+    """One Messages API call.
+
+    Note there is no `temperature`: sampling parameters were removed on the
+    current Claude models and sending one returns a 400.
     """
-    provider = resolve_provider(openrouter_key, groq_key, provider_preference)
-    api_key = openrouter_key if provider == OPENROUTER else groq_key
-    client = make_client(provider, api_key)
-    resolved = resolve_model(client, provider, model)
-    label = f"{provider}/{resolved}"
+    base = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    attempts = []
+    if effort in _EFFORT_LEVELS:
+        attempts.append({**base, "output_config": {"effort": effort}})
+    attempts.append(base)
 
+    last_error: Exception | None = None
+    for kwargs in attempts:
+        try:
+            response = client.messages.create(**kwargs)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            last_error = exc
+            continue
+        if getattr(response, "stop_reason", None) == "refusal":
+            details = getattr(response, "stop_details", None)
+            raise Refused(
+                f"the model declined this request ({getattr(details, 'category', 'unspecified')})"
+            )
+        return _anthropic_text(response)
+    raise last_error  # type: ignore[misc]
+
+
+def _chat_openai_compatible(
+    client, model: str, prompt: str, temperature: float, max_tokens: int, want_json: bool
+) -> str:
     kwargs = {
-        "model": resolved,
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -161,12 +213,45 @@ def chat(
             response = client.chat.completions.create(
                 **kwargs, response_format={"type": "json_object"}
             )
-            return (response.choices[0].message.content or ""), label
+            return response.choices[0].message.content or ""
         except Exception:  # pylint: disable=broad-exception-caught
             pass  # model does not support JSON mode — fall through to plain text
 
     response = client.chat.completions.create(**kwargs)
-    return (response.choices[0].message.content or ""), label
+    return response.choices[0].message.content or ""
+
+
+def chat(
+    prompt: str,
+    *,
+    anthropic_key: str = "",
+    openrouter_key: str = "",
+    groq_key: str = "",
+    provider_preference: str = "",
+    model: str = "",
+    temperature: float = 0.3,
+    max_tokens: int = 1000,
+    want_json: bool = False,
+    effort: str = "medium",
+) -> tuple[str, str]:
+    """Send one prompt. Returns (text, "provider/model" actually used).
+
+    JSON mode is requested when the provider supports it but never required —
+    callers parse defensively, so a model without it still answers.
+    """
+    provider = resolve_provider(anthropic_key, openrouter_key, groq_key, provider_preference)
+    api_key = {
+        ANTHROPIC: anthropic_key, OPENROUTER: openrouter_key, GROQ: groq_key
+    }[provider]
+    client = make_client(provider, api_key)
+    resolved = resolve_model(client, provider, model)
+    label = f"{provider}/{resolved}"
+
+    if provider == ANTHROPIC:
+        return _chat_anthropic(client, resolved, prompt, max_tokens, effort), label
+    return _chat_openai_compatible(
+        client, resolved, prompt, temperature, max_tokens, want_json
+    ), label
 
 
 def parse_json_object(text: str) -> dict:

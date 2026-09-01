@@ -8,8 +8,10 @@ the provider selection, using fakes — no network call is made.
 import pytest
 
 from analysis.llm import (
+    ANTHROPIC,
     GROQ,
     OPENROUTER,
+    Refused,
     NoProviderConfigured,
     NoUsableModel,
     available_chat_models,
@@ -27,37 +29,43 @@ class _Model:
 class _FakeClient:
     """Stands in for an OpenAI-compatible client, exposing what resolution touches."""
 
-    def __init__(self, model_ids, completions=None):
+    def __init__(self, model_ids, completions=None, messages=None):
         self.models = type("M", (), {"list": lambda _self: type(
             "R", (), {"data": [_Model(m) for m in model_ids]})()})()
         self.chat = type("Chat", (), {"completions": completions})()
+        self.messages = messages
 
 
 # ── Provider selection ────────────────────────────────────────────────────────
 
 
-def test_openrouter_preferred_when_both_keys_present():
-    assert resolve_provider(openrouter_key="or", groq_key="gq") == OPENROUTER
+def test_anthropic_wins_when_every_key_is_present():
+    assert resolve_provider("an", "or", "gq") == ANTHROPIC
 
 
-def test_falls_back_to_whichever_key_exists():
-    assert resolve_provider(openrouter_key="", groq_key="gq") == GROQ
-    assert resolve_provider(openrouter_key="or", groq_key="") == OPENROUTER
+def test_falls_back_down_the_quality_order():
+    assert resolve_provider("", "or", "gq") == OPENROUTER
+    assert resolve_provider("", "", "gq") == GROQ
 
 
 def test_explicit_preference_wins_when_its_key_is_present():
-    assert resolve_provider("or", "gq", preference="groq") == GROQ
-    assert resolve_provider("or", "gq", preference="OpenRouter") == OPENROUTER
+    assert resolve_provider("an", "or", "gq", preference="groq") == GROQ
+    assert resolve_provider("an", "or", "gq", preference="OpenRouter") == OPENROUTER
+    assert resolve_provider("an", "or", "gq", preference="anthropic") == ANTHROPIC
 
 
 def test_preference_for_a_provider_without_a_key_is_ignored():
     """Asking for groq with no groq key must not fail — fall back to what works."""
-    assert resolve_provider(openrouter_key="or", groq_key="", preference="groq") == OPENROUTER
+    assert resolve_provider("", "or", "", preference="groq") == OPENROUTER
+
+
+def test_unknown_preference_string_falls_through_rather_than_raising():
+    assert resolve_provider("an", "", "", preference="not-a-provider") == ANTHROPIC
 
 
 def test_no_keys_raises_a_named_error():
     with pytest.raises(NoProviderConfigured):
-        resolve_provider("", "")
+        resolve_provider("", "", "")
 
 
 # ── Model filtering ───────────────────────────────────────────────────────────
@@ -72,6 +80,11 @@ def test_non_chat_models_are_excluded():
 
 
 # ── Model preference ──────────────────────────────────────────────────────────
+
+
+def test_anthropic_resolves_to_opus_5():
+    client = _FakeClient(["claude-haiku-4-5", "claude-opus-5", "claude-sonnet-5"])
+    assert resolve_model(client, ANTHROPIC) == "claude-opus-5"
 
 
 def test_best_available_openrouter_preference_wins():
@@ -158,7 +171,8 @@ def _patched_chat(monkeypatch, client, **kwargs):
     from analysis import llm
 
     monkeypatch.setattr(llm, "make_client", lambda provider, api_key: client)
-    return llm.chat("Say hi", openrouter_key="test-key", **kwargs)
+    kwargs.setdefault("openrouter_key", "test-key")
+    return llm.chat("Say hi", **kwargs)
 
 
 def test_chat_returns_text_and_a_provider_qualified_model_label(monkeypatch):
@@ -203,3 +217,81 @@ def test_empty_content_becomes_an_empty_string_not_none(monkeypatch):
     text, _ = _patched_chat(monkeypatch, client)
 
     assert text == ""
+
+
+# ── Anthropic's Messages API differs from the OpenAI shape ────────────────────
+
+
+class _Block:
+    def __init__(self, btype, text=""):
+        self.type = btype
+        self.text = text
+
+
+class _FakeMessages:
+    def __init__(self, blocks, stop_reason="end_turn", reject_effort=False):
+        self.blocks = blocks
+        self.stop_reason = stop_reason
+        self.reject_effort = reject_effort
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.reject_effort and "output_config" in kwargs:
+            raise ValueError("output_config not supported on this model")
+        return type("R", (), {
+            "content": self.blocks,
+            "stop_reason": self.stop_reason,
+            "stop_details": type("D", (), {"category": "cyber"})(),
+        })()
+
+
+def _anthropic_client(messages, model_ids=("claude-opus-5",)):
+    return _FakeClient(list(model_ids), messages=messages)
+
+
+def _patched_anthropic(monkeypatch, client, **kwargs):
+    from analysis import llm
+
+    monkeypatch.setattr(llm, "make_client", lambda provider, api_key: client)
+    return llm.chat("Say hi", anthropic_key="test-key", **kwargs)
+
+
+def test_anthropic_never_sends_temperature():
+    """Sampling params were removed on current Claude models — sending one is a 400."""
+    import inspect
+
+    from analysis import llm
+
+    source = inspect.getsource(llm._chat_anthropic)  # pylint: disable=protected-access
+    assert "temperature" not in source.split('"""')[2]
+
+
+def test_anthropic_joins_text_blocks_and_skips_thinking(monkeypatch):
+    messages = _FakeMessages([
+        _Block("thinking", "internal reasoning that must not leak"),
+        _Block("text", "the "),
+        _Block("text", "answer"),
+    ])
+    text, label = _patched_anthropic(monkeypatch, _anthropic_client(messages))
+
+    assert text == "the answer"
+    assert label == "anthropic/claude-opus-5"
+    assert "temperature" not in messages.calls[0]
+
+
+def test_anthropic_sends_effort_and_retries_without_it_when_rejected(monkeypatch):
+    """Model resolution can land on an older model where output_config 400s."""
+    messages = _FakeMessages([_Block("text", "ok")], reject_effort=True)
+    text, _ = _patched_anthropic(monkeypatch, _anthropic_client(messages), effort="low")
+
+    assert text == "ok"
+    assert len(messages.calls) == 2
+    assert messages.calls[0]["output_config"] == {"effort": "low"}
+    assert "output_config" not in messages.calls[1]
+
+
+def test_a_refusal_raises_rather_than_returning_empty_prose(monkeypatch):
+    messages = _FakeMessages([_Block("text", "")], stop_reason="refusal")
+    with pytest.raises(Refused):
+        _patched_anthropic(monkeypatch, _anthropic_client(messages))

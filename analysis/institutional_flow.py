@@ -117,7 +117,10 @@ def classify_institution_names(names: list[str], chat_fn) -> dict[str, str]:
 
     from analysis.llm import parse_json_object
 
-    text, _model = chat_fn(prompt, temperature=0.0, max_tokens=1500, want_json=True)
+    # Labelling names is mechanical — the cheapest useful effort setting.
+    text, _model = chat_fn(
+        prompt, temperature=0.0, max_tokens=2000, want_json=True, effort="low"
+    )
     raw = parse_json_object(text)
     valid = {c.value for c in HolderCategory}
     return {k: v for k, v in raw.items() if isinstance(v, str) and v in valid}

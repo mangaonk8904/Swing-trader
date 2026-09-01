@@ -61,9 +61,10 @@ def _secret(name: str) -> str:
         return ""
 
 
-def llm_keys() -> tuple[str, str]:
-    """(openrouter_key, groq_key) from .env first, then Streamlit secrets."""
+def llm_keys() -> tuple[str, str, str]:
+    """(anthropic, openrouter, groq) keys — .env first, then Streamlit secrets."""
     return (
+        settings.anthropic_api_key or _secret("ANTHROPIC_API_KEY"),
         settings.openrouter_api_key or _secret("OPENROUTER_API_KEY"),
         settings.groq_api_key or _secret("GROQ_API_KEY"),
     )
@@ -74,8 +75,8 @@ def llm_available() -> bool:
 
 
 NO_LLM_KEY_MESSAGE = (
-    "No LLM key configured. Add OPENROUTER_API_KEY (or GROQ_API_KEY) to your "
-    ".env file or Streamlit secrets."
+    "No LLM key configured. Add ANTHROPIC_API_KEY (or OPENROUTER_API_KEY / "
+    "GROQ_API_KEY) to your .env file or Streamlit secrets."
 )
 
 
@@ -85,9 +86,10 @@ def llm_chat(prompt: str, **kwargs) -> tuple[str, str]:
     Returns (answer, "provider/model") — both are resolved at call time, so a
     retired model ID or a provider switch cannot silently break the AI panels.
     """
-    openrouter_key, groq_key = llm_keys()
+    anthropic_key, openrouter_key, groq_key = llm_keys()
     return _llm_chat_raw(
         prompt,
+        anthropic_key=anthropic_key,
         openrouter_key=openrouter_key,
         groq_key=groq_key,
         provider_preference=settings.llm_provider,
@@ -1359,7 +1361,7 @@ with tab_filings:
 
                 if class_status == "no-key":
                     st.caption(
-                        "Institution types inferred from names — add OPENROUTER_API_KEY for "
+                        "Institution types inferred from names — add ANTHROPIC_API_KEY for "
                         "model-assisted classification."
                     )
                 elif class_status != "ok":
@@ -1428,7 +1430,7 @@ with tab_filings:
                     st.markdown(narrative)
                 elif narr_status == "no-key":
                     st.caption(
-                        "Add OPENROUTER_API_KEY to get a written interpretation of these numbers."
+                        "Add ANTHROPIC_API_KEY to get a written interpretation of these numbers."
                     )
                 else:
                     st.caption(f"Written summary unavailable ({narr_status}). The figures above are unaffected.")
