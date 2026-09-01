@@ -21,7 +21,12 @@ class Settings(BaseSettings):
     fintel_api_key: str = ""
     seeking_alpha_rapidapi_key: str = ""
     groq_api_key: str = ""
-    groq_model: str = ""   # optional override; auto-resolved when blank
+    openrouter_api_key: str = ""
+    # "openrouter" | "groq" | "" to pick whichever key is present
+    llm_provider: str = ""
+    # Explicit model id; auto-resolved from the provider's catalogue when blank
+    llm_model: str = ""
+    groq_model: str = ""   # legacy alias for llm_model
 
     def model_post_init(self, __context) -> None:  # pylint: disable=arguments-differ
         # Fall back to Streamlit secrets if env vars are empty
@@ -31,8 +36,14 @@ class Settings(BaseSettings):
             self.seeking_alpha_rapidapi_key = _get_streamlit_secret("SEEKING_ALPHA_RAPIDAPI_KEY")
         if not self.groq_api_key:
             self.groq_api_key = _get_streamlit_secret("GROQ_API_KEY")
+        if not self.openrouter_api_key:
+            self.openrouter_api_key = _get_streamlit_secret("OPENROUTER_API_KEY")
+        if not self.llm_provider:
+            self.llm_provider = _get_streamlit_secret("LLM_PROVIDER")
         if not self.groq_model:
             self.groq_model = _get_streamlit_secret("GROQ_MODEL")
+        if not self.llm_model:
+            self.llm_model = _get_streamlit_secret("LLM_MODEL") or self.groq_model
 
     # Scoring Weights (must sum to 1.0)
     technical_weight: float = 0.30

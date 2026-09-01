@@ -86,14 +86,15 @@ def parse_holders(rows: list[dict]) -> list[HolderMove]:
     return moves
 
 
-def classify_with_llm(names: list[str], groq_key: str, model: str = "") -> dict[str, str]:
+def classify_institution_names(names: list[str], chat_fn) -> dict[str, str]:
     """Ask the model to label each institution. Returns {name: category}.
 
-    Any name the model omits, mislabels, or returns in an unknown category is
-    left to the heuristic by the caller — a bad label must not become a silent
-    fact in the summary.
+    `chat_fn` is injected so this stays provider-agnostic — it takes a prompt
+    and returns (text, model_label). Any name the model omits, mislabels, or
+    returns in an unknown category is left to the heuristic by the caller: a
+    bad label must never become a silent fact in the summary.
     """
-    if not groq_key or not names:
+    if not names:
         return {}
 
     allowed = [c.value for c in HolderCategory]
@@ -114,10 +115,9 @@ def classify_with_llm(names: list[str], groq_key: str, model: str = "") -> dict[
         "Names:\n" + "\n".join(f"- {n}" for n in names)
     )
 
-    from analysis.llm import chat, parse_json_object
+    from analysis.llm import parse_json_object
 
-    text, _ = chat(groq_key, prompt, model=model, temperature=0.0,
-                   max_tokens=1500, want_json=True)
+    text, _model = chat_fn(prompt, temperature=0.0, max_tokens=1500, want_json=True)
     raw = parse_json_object(text)
     valid = {c.value for c in HolderCategory}
     return {k: v for k, v in raw.items() if isinstance(v, str) and v in valid}
