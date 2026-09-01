@@ -172,3 +172,52 @@ class ChartAnalysis(BaseModel):
     zones: list[Zone] = []
     levels: list[Level] = []
     warnings: list[str] = []
+
+
+# ── Institutional Flow (13F/NPORT) Models ─────────────────────────────────────
+
+
+class HolderCategory(str, Enum):
+    HEDGE_FUND = "hedge fund"
+    INDEX = "index/passive"
+    MUTUAL_FUND = "mutual fund"
+    BANK = "bank/broker"
+    PENSION = "pension/sovereign"
+    OTHER = "other"
+
+
+class HolderMove(BaseModel):
+    """One institution's position change in the latest filing."""
+    name: str
+    category: HolderCategory = HolderCategory.OTHER
+    form_type: str = ""
+    as_of: str = ""
+    shares: int = 0
+    shares_change: int = 0
+    shares_pct_change: float | None = None
+    ownership_pct: float | None = None
+    value: float | None = None
+    value_change: float | None = None
+    is_new_position: bool = False
+    url: str = ""
+
+
+class InstitutionalFlow(BaseModel):
+    """Aggregate read of who is accumulating or distributing a stock."""
+    ticker: str
+    holders: int = 0
+    buyers: int = 0
+    sellers: int = 0
+    unchanged: int = 0
+    new_positions: int = 0
+    net_shares: int = 0
+    net_value: float = 0.0
+    buy_breadth: float = 0.0        # share of movers that added, 0-100
+    sentiment_score: float = 0.0    # -100 (distributing) .. +100 (accumulating)
+    sentiment_label: str = "No data"
+    top_buyers: list[HolderMove] = []
+    top_sellers: list[HolderMove] = []
+    by_category: dict[str, float] = {}   # category -> net shares
+    hedge_funds: list[HolderMove] = []
+    as_of_periods: dict[str, int] = {}   # effectiveDate -> row count
+    caveats: list[str] = []
