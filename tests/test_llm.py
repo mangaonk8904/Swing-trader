@@ -302,7 +302,7 @@ def test_workspace_id_is_sent_as_a_header_only_when_present(monkeypatch):
     captured = {}
 
     class _FakeAnthropic:
-        def __init__(self, api_key=None, default_headers=None):
+        def __init__(self, api_key=None, default_headers=None):  # pylint: disable=unused-argument
             captured["headers"] = default_headers
 
     import analysis.llm as llm_mod
