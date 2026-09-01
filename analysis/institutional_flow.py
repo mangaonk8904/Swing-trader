@@ -9,7 +9,6 @@ narrates, it never supplies a figure.
 
 from __future__ import annotations
 
-import json
 import re
 
 from schemas import HolderCategory, HolderMove, InstitutionalFlow
@@ -87,7 +86,7 @@ def parse_holders(rows: list[dict]) -> list[HolderMove]:
     return moves
 
 
-def classify_with_llm(names: list[str], groq_key: str, model: str = "llama-3.3-70b-versatile") -> dict[str, str]:
+def classify_with_llm(names: list[str], groq_key: str, model: str = "") -> dict[str, str]:
     """Ask the model to label each institution. Returns {name: category}.
 
     Any name the model omits, mislabels, or returns in an unknown category is
@@ -115,17 +114,11 @@ def classify_with_llm(names: list[str], groq_key: str, model: str = "llama-3.3-7
         "Names:\n" + "\n".join(f"- {n}" for n in names)
     )
 
-    from groq import Groq  # imported lazily so the app starts without groq installed
+    from analysis.llm import chat, parse_json_object
 
-    client = Groq(api_key=groq_key)
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.0,
-        max_tokens=1500,
-        response_format={"type": "json_object"},
-    )
-    raw = json.loads(response.choices[0].message.content)
+    text, _ = chat(groq_key, prompt, model=model, temperature=0.0,
+                   max_tokens=1500, want_json=True)
+    raw = parse_json_object(text)
     valid = {c.value for c in HolderCategory}
     return {k: v for k, v in raw.items() if isinstance(v, str) and v in valid}
 

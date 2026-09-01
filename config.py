@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     fintel_api_key: str = ""
     seeking_alpha_rapidapi_key: str = ""
     groq_api_key: str = ""
+    groq_model: str = ""   # optional override; auto-resolved when blank
 
     def model_post_init(self, __context) -> None:  # pylint: disable=arguments-differ
         # Fall back to Streamlit secrets if env vars are empty
@@ -30,6 +31,8 @@ class Settings(BaseSettings):
             self.seeking_alpha_rapidapi_key = _get_streamlit_secret("SEEKING_ALPHA_RAPIDAPI_KEY")
         if not self.groq_api_key:
             self.groq_api_key = _get_streamlit_secret("GROQ_API_KEY")
+        if not self.groq_model:
+            self.groq_model = _get_streamlit_secret("GROQ_MODEL")
 
     # Scoring Weights (must sum to 1.0)
     technical_weight: float = 0.30
