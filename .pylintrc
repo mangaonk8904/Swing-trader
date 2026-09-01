@@ -27,6 +27,7 @@ disable =
     too-many-positional-arguments,
     too-many-lines,
     too-few-public-methods,
+    too-many-instance-attributes,
     duplicate-code,
 
     # Plotly's API is keyword-oriented; dict(...) matches its own documentation

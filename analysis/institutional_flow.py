@@ -9,7 +9,6 @@ narrates, it never supplies a figure.
 
 from __future__ import annotations
 
-import json
 import re
 
 from schemas import HolderCategory, HolderMove, InstitutionalFlow
@@ -87,14 +86,15 @@ def parse_holders(rows: list[dict]) -> list[HolderMove]:
     return moves
 
 
-def classify_with_llm(names: list[str], groq_key: str, model: str = "llama-3.3-70b-versatile") -> dict[str, str]:
+def classify_institution_names(names: list[str], chat_fn) -> dict[str, str]:
     """Ask the model to label each institution. Returns {name: category}.
 
-    Any name the model omits, mislabels, or returns in an unknown category is
-    left to the heuristic by the caller — a bad label must not become a silent
-    fact in the summary.
+    `chat_fn` is injected so this stays provider-agnostic — it takes a prompt
+    and returns (text, model_label). Any name the model omits, mislabels, or
+    returns in an unknown category is left to the heuristic by the caller: a
+    bad label must never become a silent fact in the summary.
     """
-    if not groq_key or not names:
+    if not names:
         return {}
 
     allowed = [c.value for c in HolderCategory]
@@ -115,17 +115,13 @@ def classify_with_llm(names: list[str], groq_key: str, model: str = "llama-3.3-7
         "Names:\n" + "\n".join(f"- {n}" for n in names)
     )
 
-    from groq import Groq  # imported lazily so the app starts without groq installed
+    from analysis.llm import parse_json_object
 
-    client = Groq(api_key=groq_key)
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.0,
-        max_tokens=1500,
-        response_format={"type": "json_object"},
+    # Labelling names is mechanical — the cheapest useful effort setting.
+    text, _model = chat_fn(
+        prompt, temperature=0.0, max_tokens=2000, want_json=True, effort="low"
     )
-    raw = json.loads(response.choices[0].message.content)
+    raw = parse_json_object(text)
     valid = {c.value for c in HolderCategory}
     return {k: v for k, v in raw.items() if isinstance(v, str) and v in valid}
 
@@ -265,7 +261,7 @@ Hedge funds identified: {', '.join(m.name for m in flow.hedge_funds) or 'none in
 Known limitations of this data:
 {chr(10).join('  - ' + c for c in flow.caveats)}
 
-Write 3-4 short paragraphs:
+Write 3-4 paragraphs, each under 110 words:
 1. What the ownership flow actually shows, naming the notable movers.
 2. Whether this is discretionary conviction or mechanical index/passive flow — be explicit,
    since that distinction decides whether the signal means anything.
@@ -273,5 +269,5 @@ Write 3-4 short paragraphs:
    13F data is filed up to 45 days after quarter end, so it is lagging by construction —
    say so if it matters to the read.
 
-Be direct. Do not overstate a weak signal. If the data does not support a conclusion,
-say that instead of manufacturing one."""
+Be direct and finish every sentence. Do not overstate a weak signal. If the data
+does not support a conclusion, say that instead of manufacturing one."""
