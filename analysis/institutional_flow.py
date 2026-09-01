@@ -258,7 +258,7 @@ Hedge funds identified: {', '.join(m.name for m in flow.hedge_funds) or 'none in
 Known limitations of this data:
 {chr(10).join('  - ' + c for c in flow.caveats)}
 
-Write 3-4 short paragraphs:
+Write 3-4 paragraphs, each under 110 words:
 1. What the ownership flow actually shows, naming the notable movers.
 2. Whether this is discretionary conviction or mechanical index/passive flow — be explicit,
    since that distinction decides whether the signal means anything.
@@ -266,5 +266,5 @@ Write 3-4 short paragraphs:
    13F data is filed up to 45 days after quarter end, so it is lagging by construction —
    say so if it matters to the read.
 
-Be direct. Do not overstate a weak signal. If the data does not support a conclusion,
-say that instead of manufacturing one."""
+Be direct and finish every sentence. Do not overstate a weak signal. If the data
+does not support a conclusion, say that instead of manufacturing one."""
