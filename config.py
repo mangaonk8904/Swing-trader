@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     openrouter_api_key: str = ""
     anthropic_api_key: str = ""
+    # Required when the key is identity-linked to a workspace
+    anthropic_workspace_id: str = ""
     # "anthropic" | "openrouter" | "groq" | "" to pick whichever key is present
     llm_provider: str = ""
     # Explicit model id; auto-resolved from the provider's catalogue when blank
@@ -41,6 +43,8 @@ class Settings(BaseSettings):
             self.openrouter_api_key = _get_streamlit_secret("OPENROUTER_API_KEY")
         if not self.anthropic_api_key:
             self.anthropic_api_key = _get_streamlit_secret("ANTHROPIC_API_KEY")
+        if not self.anthropic_workspace_id:
+            self.anthropic_workspace_id = _get_streamlit_secret("ANTHROPIC_WORKSPACE_ID")
         if not self.llm_provider:
             self.llm_provider = _get_streamlit_secret("LLM_PROVIDER")
         if not self.groq_model:

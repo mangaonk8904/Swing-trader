@@ -93,6 +93,7 @@ def llm_chat(prompt: str, **kwargs) -> tuple[str, str]:
         openrouter_key=openrouter_key,
         groq_key=groq_key,
         provider_preference=settings.llm_provider,
+        workspace_id=settings.anthropic_workspace_id or _secret("ANTHROPIC_WORKSPACE_ID"),
         model=settings.llm_model,
         **kwargs,
     )
@@ -1139,6 +1140,10 @@ def _llm_error(exc: Exception) -> str:
     Status code first — the class name alone sent us chasing a "broken feature"
     when the real causes were a retired model and an exhausted credit budget.
     """
+    text = str(exc)
+    if "anthropic-workspace-id" in text:
+        return "failed: this Anthropic key is workspace-scoped — set ANTHROPIC_WORKSPACE_ID"
+
     status = getattr(exc, "status_code", None)
     by_status = {
         401: "the provider rejected the API key",

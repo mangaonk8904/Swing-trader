@@ -170,7 +170,7 @@ def _chat_client(model_ids, completions):
 def _patched_chat(monkeypatch, client, **kwargs):
     from analysis import llm
 
-    monkeypatch.setattr(llm, "make_client", lambda provider, api_key: client)
+    monkeypatch.setattr(llm, "make_client", lambda *_a, **_k: client)
     kwargs.setdefault("openrouter_key", "test-key")
     return llm.chat("Say hi", **kwargs)
 
@@ -253,7 +253,7 @@ def _anthropic_client(messages, model_ids=("claude-opus-5",)):
 def _patched_anthropic(monkeypatch, client, **kwargs):
     from analysis import llm
 
-    monkeypatch.setattr(llm, "make_client", lambda provider, api_key: client)
+    monkeypatch.setattr(llm, "make_client", lambda *_a, **_k: client)
     return llm.chat("Say hi", anthropic_key="test-key", **kwargs)
 
 
@@ -295,3 +295,22 @@ def test_a_refusal_raises_rather_than_returning_empty_prose(monkeypatch):
     messages = _FakeMessages([_Block("text", "")], stop_reason="refusal")
     with pytest.raises(Refused):
         _patched_anthropic(monkeypatch, _anthropic_client(messages))
+
+
+def test_workspace_id_is_sent_as_a_header_only_when_present(monkeypatch):
+    """Identity-linked Anthropic keys reject every request without this header."""
+    captured = {}
+
+    class _FakeAnthropic:
+        def __init__(self, api_key=None, default_headers=None):
+            captured["headers"] = default_headers
+
+    import analysis.llm as llm_mod
+    monkeypatch.setitem(__import__("sys").modules, "anthropic",
+                        type("M", (), {"Anthropic": _FakeAnthropic}))
+
+    llm_mod.make_client(ANTHROPIC, "k", "wrkspc_123")
+    assert captured["headers"] == {"anthropic-workspace-id": "wrkspc_123"}
+
+    llm_mod.make_client(ANTHROPIC, "k", "")
+    assert captured["headers"] is None

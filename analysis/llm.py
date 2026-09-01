@@ -103,12 +103,15 @@ def resolve_provider(
     )
 
 
-def make_client(provider: str, api_key: str):
+def make_client(provider: str, api_key: str, workspace_id: str = ""):
     """A client for the provider. Imported lazily so one SDK can be absent."""
     if provider == ANTHROPIC:
         from anthropic import Anthropic
 
-        return Anthropic(api_key=api_key)
+        # Identity-linked keys are scoped to a workspace and reject every
+        # request without this header.
+        headers = {"anthropic-workspace-id": workspace_id} if workspace_id else None
+        return Anthropic(api_key=api_key, default_headers=headers)
     if provider == OPENROUTER:
         from openai import OpenAI
 
@@ -228,6 +231,7 @@ def chat(
     openrouter_key: str = "",
     groq_key: str = "",
     provider_preference: str = "",
+    workspace_id: str = "",
     model: str = "",
     temperature: float = 0.3,
     max_tokens: int = 1000,
@@ -243,7 +247,7 @@ def chat(
     api_key = {
         ANTHROPIC: anthropic_key, OPENROUTER: openrouter_key, GROQ: groq_key
     }[provider]
-    client = make_client(provider, api_key)
+    client = make_client(provider, api_key, workspace_id)
     resolved = resolve_model(client, provider, model)
     label = f"{provider}/{resolved}"
 
